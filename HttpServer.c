@@ -57,6 +57,55 @@ struct HttpRequest
 
 struct HttpResponse
 {
+	/*char *accessControlAllowOrigin;
+	char *accessControlAllowCredentials;
+	char *accessControlExposeHeaders;
+	char *accessControlMaxAge;
+	char *accessControlAllowMethods;
+	char *accessControlAllowHeaders;
+	char *acceptPatch;
+	char *acceptRanges;
+	char *age;
+	char *allow;
+	char *altSvc;
+	char *cacheControl;
+	char *connection;
+	char *contentDisposition;
+	char *contentEncoding;
+	char *contentLanguage;
+	char *contentLength;
+	char *contentLocation;
+	char *contentMD5;
+	char *contentRange;
+	char *contentType;
+	char *date;
+	char *deltaBase;
+	char *eTag;
+	char *expires;
+	char *im;
+	char *lastModified;
+	char *link;
+	char *location;
+	char *p3p;
+	char *pragma;
+	char *proxyAuthenticate;
+	char *publicKeyPins;
+	char *retryAfter;
+	char *server;
+	char *setCookie;
+	char *strictTransportSecurity;
+	char *trailer;
+	char *transferEncoding;
+	char *tk;
+	char *upgrade;
+	char *vary;
+	char *via;
+	char *warning;
+	char *wwwAuthenticate;
+	char *xFrameOptions;*/
+
+	const char *fields[HttpResponseField_X_Frame_Options + 1];
+
 	char *body;
 	size_t bodySize;
 };
@@ -201,7 +250,7 @@ static void *httpParser(void *arg)
 				char *match = strstr(resource, info->server->handlerVector[i].context);
 				
 				if (match && match == resource) //si matcheo al principio del string
-				{
+				{ //Make a match function that doesn't make a literal compare. Instead, compare everything except slashes
 					size_t contextLength = strlen(info->server->handlerVector[i].context);
 
 					if (contextLength > bestMatchLength) {
@@ -300,6 +349,107 @@ static void createServerErrorHandler(HttpServerPtr *sv)
     free(*sv);
     *sv = NULL;
     //printf("%s\n", strerror(errno));
+}
+
+static const char *getHttpResponseFieldText(int field)
+{
+	switch (field)
+	{
+	case HttpResponseField_Access_Control_Allow_Origin:
+		return "Access-Control-Allow-Origin: ";
+	case HttpResponseField_Access_Control_Allow_Credentials:
+		return "Access-Control-Allow-Credentials: ";
+	case HttpResponseField_Access_Control_Expose_Headers:
+		return "Access-Control-Expose-Headers: ";
+	case HttpResponseField_Access_Control_Max_Age:
+		return "Access-Control-Max-Age: ";
+	case HttpResponseField_Access_Control_Allow_Methods:
+		return "Access-Control-Allow-Methods: ";
+	case HttpResponseField_Access_Control_Allow_Headers:
+		return "Access-Control-Allow-Headers: ";
+	case HttpResponseField_Accept_Patch:
+		return "Accept-Patch: ";
+	case HttpResponseField_Accept_Ranges:
+		return "Accept-Ranges: ";
+	case HttpResponseField_Age:
+		return "Age: ";
+	case HttpResponseField_Allow:
+		return "Allow: ";
+	case HttpResponseField_Alt_Svc:
+		return "Alt-Svc: ";
+	case HttpResponseField_Cache_Control:
+		return "Cache-Control: ";
+	case HttpResponseField_Connection:
+		return "Connection: ";
+	case HttpResponseField_Content_Disposition:
+		return "Content-Disposition: ";
+	case HttpResponseField_Content_Encoding:
+		return "Content-Encoding: ";
+	case HttpResponseField_Content_Language:
+		return "Content-Language: ";
+	case HttpResponseField_Content_Length:
+		return "Content-Length: ";
+	case HttpResponseField_Content_Location:
+		return "Content-Location: ";
+	case HttpResponseField_Content_MD5:
+		return "Content-MD5: ";
+	case HttpResponseField_Content_Range:
+		return "Content-Range: ";
+	case HttpResponseField_Content_Type:
+		return "Content-Type: ";
+	case HttpResponseField_Date:
+		return "Date: ";
+	case HttpResponseField_Delta_Base:
+		return "Delta-Base: ";
+	case HttpResponseField_ETag:
+		return "ETag: ";
+	case HttpResponseField_Expires:
+		return "Expires: ";
+	case HttpResponseField_IM:
+		return "IM: ";
+	case HttpResponseField_Last_Modified:
+		return "Last-Modified: ";
+	case HttpResponseField_Link:
+		return "Link: ";
+	case HttpResponseField_Location:
+		return "Location: ";
+	case HttpResponseField_P3P:
+		return "P3P: ";
+	case HttpResponseField_Pragma:
+		return "Pragma: ";
+	case HttpResponseField_Proxy_Authenticate:
+		return "Proxy-Authenticate: ";
+	case HttpResponseField_Public_Key_Pins:
+		return "Public-Key-Pins: ";
+	case HttpResponseField_Retry_After:
+		return "Retry-After: ";
+	case HttpResponseField_Server:
+		return "Server: ";
+	case HttpResponseField_Set_Cookie:
+		return "Set-Cookie: ";
+	case HttpResponseField_Strict_Transport_Security:
+		return "Strict-Transport-Security: ";
+	case HttpResponseField_Trailer:
+		return "Trailer: ";
+	case HttpResponseField_Transfer_Encoding:
+		return "Transfer-Encoding: ";
+	case HttpResponseField_Tk:
+		return "Tk: ";
+	case HttpResponseField_Upgrade:
+		return "Upgrade: ";
+	case HttpResponseField_Vary:
+		return "Vary: ";
+	case HttpResponseField_Via:
+		return "Via: ";
+	case HttpResponseField_Warning:
+		return "Warning: ";
+	case HttpResponseField_WWW_Authenticate:
+		return "WWW-Authenticate: ";
+	case HttpResponseField_X_Frame_Options:
+		return "X-Frame-Options: ";
+	default:
+		return NULL;
+	}
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -425,6 +575,21 @@ void HttpServer_DestroyResponse(HttpResponsePtr response)
 {
 	free(response->body);
 	free(response);
+}
+
+void HttpServer_SetResponseField(HttpResponsePtr response, int field, const char *value)
+{
+	free(response->fields[field]);
+	response->fields[field] = malloc(strlen(value) + 1);
+	strcpy(response->fields[field], value);
+}
+
+void HttpServer_SetResponseBody(HttpResponsePtr response, const void *body, size_t bodyLength)
+{
+	free(body);
+	response->body = malloc(bodyLength);
+	response->bodySize = bodyLength;
+	memcpy(response->body, body, bodyLength);
 }
 
 void HttpServer_SendHtml(HttpRequestPtr request, const char *html)
