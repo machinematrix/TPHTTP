@@ -1,10 +1,19 @@
 #ifndef __HTTPSERVER__
 #define __HTTPSERVER__
 
-enum States
+enum State
 {
     Running = 1,
 	Stopped
+};
+
+enum HttpResponseField
+{
+	HttpResponseField_Connection,
+	HttpResponseField_Content_Encoding,
+	HttpResponseField_Content_Language,
+	HttpResponseField_Content_Length,
+	HttpResponseField_Content_Location,
 };
 
 typedef struct HttpServer *HttpServerPtr;
