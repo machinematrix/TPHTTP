@@ -26,6 +26,7 @@ typedef int Socket;
 #include <windows.h>
 #pragma comment(lib,"ws2_32.lib")
 #define ioctl ioctlsocket
+#define errno (WSAGetLastError())
 typedef SOCKET Socket;
 #endif
 
@@ -114,6 +115,26 @@ static void HttpServerSetStatus(HttpServerPtr sv, int state)
 //
 //	return result;
 //}
+
+static int myWrite(Socket sock, const void *buffer, size_t size)
+{
+	int result = 0;
+
+	size_t bytesSent = 0;
+	while (bytesSent < size)
+	{
+		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
+		if (tempBytesSent > 0) {
+			bytesSent += tempBytesSent;
+		}
+		else {
+			result = errno;
+			break;
+		}
+	}
+
+	return result;
+}
 
 //resultado es memoria dinamica
 static char* getHttpRequestText(int sock)
@@ -249,26 +270,6 @@ static char poke(HttpServerPtr data) //returns 1 if it could poke server, 0 othe
 
 		close(socketHandle);
 	}
-	return result;
-}
-
-static int myWrite(Socket sock, void *buffer, size_t size)
-{
-	int result = 0;
-
-	size_t bytesSent = 0;
-	while (bytesSent < size)
-	{
-		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
-		if (tempBytesSent > 0) {
-			bytesSent += tempBytesSent;
-		}
-		else {
-			result = errno;
-			break;
-		}
-	}
-
 	return result;
 }
 
