@@ -32,7 +32,7 @@ typedef SOCKET Socket;
 
 typedef struct
 {
-	char *resource;
+	char *context;
 	HandlerCallback callback;
 } HandlerSlot;
 
@@ -49,16 +49,16 @@ struct HttpServer
 	const char *errorMsg;
 };
 
-struct HttpResponse
-{
-	char *buffer;
-	size_t size;
-};
-
 struct HttpRequest
 {
 	Socket sock;
 	const char *requestText;
+};
+
+struct HttpResponse
+{
+	char *body;
+	size_t bodySize;
 };
 
 typedef struct
@@ -166,7 +166,7 @@ static char* getHttpRequestText(int sock)
 //resultado es memoria dinamica
 static char* getResourceText(char *requestText)
 {
-	char *beg = strchr(requestText, '/'), *end = (beg ? beg + strcspn(beg + 1, " ?/") + 1 : NULL), *result = NULL;
+	char *beg = strchr(requestText, '/'), *end = (beg ? beg + strcspn(beg, " ?") : NULL), *result = NULL;
 	if (beg && end)
 	{
 		result = malloc((size_t)(end - beg + 1));
@@ -187,22 +187,44 @@ static void *httpParser(void *arg)
 
 		if (resource)
 		{
-			int i;
-			char handled = 0;
+			size_t i;
+			//char handled = 0;
+			size_t handlerIndex = -1u, bestMatchLength = 0;
 
 			for (i = 0; i < info->server->handlerVectorSize; ++i)
 			{
-				if (!strcmp(resource, info->server->handlerVector[i].resource)) { //Si ya hay un slot para ese resource, sobreescribir su callback con la nueva
+				/*if (!strcmp(resource, info->server->handlerVector[i].resource)) {
 					struct HttpRequest req = { info->sock, request };
 					info->server->handlerVector[i].callback(&req);
 					handled = 1;
+				}*/
+				char *match = strstr(resource, info->server->handlerVector[i].context);
+				
+				if (match && match == resource) //si matcheo al principio del string
+				{
+					size_t contextLength = strlen(info->server->handlerVector[i].context);
+
+					if (contextLength > bestMatchLength) {
+						handlerIndex = i;
+						bestMatchLength = contextLength;
+					}
 				}
 			}
 
-			if (!handled) {
+			if (handlerIndex != -1)
+			{
+				struct HttpRequest req = { info->sock, request };
+				info->server->handlerVector[handlerIndex].callback(&req);
+			}
+			else {
 				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
 				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
 			}
+
+			/*if (!handled) {
+				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
+				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
+			}*/
 		}
 
 		free(resource);
@@ -350,7 +372,7 @@ void HttpServer_Destroy(HttpServerPtr server)
     deleteMutex(server->mtx);
 
 	for (i = 0; i < server->handlerVectorSize; ++i) {
-		free(server->handlerVector[i].resource);
+		free(server->handlerVector[i].context);
 	}
 	free(server->handlerVector);
 
@@ -365,7 +387,7 @@ void HttpServer_SetEndpointCallback(HttpServerPtr server, const char *resource, 
 		size_t i;
 		for (i = 0; i < server->handlerVectorSize; ++i)
 		{
-			if (!strcmp(resource, server->handlerVector[i].resource)) { //Si ya hay un slot para ese resource, sobreescribir su callback con la nueva
+			if (!strcmp(resource, server->handlerVector[i].context)) { //Si ya hay un slot para ese resource, sobreescribir su callback con la nueva
 				server->handlerVector[i].callback = callback;
 				return;
 			}
@@ -378,8 +400,8 @@ void HttpServer_SetEndpointCallback(HttpServerPtr server, const char *resource, 
 
 		HandlerSlot *slot = server->handlerVector + server->handlerVectorSize++;
 		slot->callback = callback;
-		slot->resource = calloc(1, strlen(resource) + 1);
-		strcpy(slot->resource, resource);
+		slot->context = calloc(1, strlen(resource) + 1);
+		strcpy(slot->context, resource);
 	}
 	else {
 		server->errorMsg = "Can't set handler while server is running";
@@ -392,6 +414,17 @@ int HttpServer_GetStatus(HttpServerPtr server)
 	int result = server->status;
 	unlockMutex(server->mtx);
 	return result;
+}
+
+HttpResponsePtr HttpServer_CreateResponse()
+{
+	return calloc(1, sizeof(struct HttpResponse));
+}
+
+void HttpServer_DestroyResponse(HttpResponsePtr response)
+{
+	free(response->body);
+	free(response);
 }
 
 void HttpServer_SendHtml(HttpRequestPtr request, const char *html)
@@ -411,7 +444,7 @@ void HttpServer_SendHtml(HttpRequestPtr request, const char *html)
 
 void HttpServer_SendResponse(HttpRequestPtr request, HttpResponsePtr response)
 {
-	myWrite(request->sock, response->buffer, response->size);
+	myWrite(request->sock, response->body, response->bodySize);
 }
 
 char* HttpServer_GetRequestUri(HttpRequestPtr request)

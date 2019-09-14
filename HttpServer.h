@@ -18,6 +18,9 @@ void HttpServer_Destroy(HttpServerPtr server);
 void HttpServer_SetEndpointCallback(HttpServerPtr server, const char *resource, HandlerCallback callback);
 int HttpServer_GetStatus(HttpServerPtr server);
 
+HttpResponsePtr HttpServer_CreateResponse();
+void HttpServer_DestroyResponse(HttpResponsePtr response);
+
 void HttpServer_SendHtml(HttpRequestPtr request, const char *html);
 void HttpServer_SendResponse(HttpRequestPtr request, HttpResponsePtr response);
 char* HttpServer_GetRequestUri(HttpRequestPtr request);
