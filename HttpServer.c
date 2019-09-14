@@ -48,6 +48,12 @@ struct HttpServer
 	const char *errorMsg;
 };
 
+struct HttpResponse
+{
+	char *buffer;
+	size_t size;
+};
+
 struct HttpRequest
 {
 	Socket sock;
@@ -174,7 +180,7 @@ static void *httpParser(void *arg)
 
 			if (!handled) {
 				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
-				write(info->sock, notFoundResponse, strlen(notFoundResponse));
+				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
 			}
 		}
 
@@ -234,7 +240,7 @@ static char poke(HttpServerPtr data) //returns 1 if it could poke server, 0 othe
 		if (!getaddrinfo(NULL, "http", &hint, &list))
 		{
 			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
-				write(socketHandle, "\r\n\r\n", 4);
+				myWrite(socketHandle, "\r\n\r\n", 4);
 				result = 1;
 			}
 
@@ -246,6 +252,26 @@ static char poke(HttpServerPtr data) //returns 1 if it could poke server, 0 othe
 	return result;
 }
 
+static int myWrite(Socket sock, void *buffer, size_t size)
+{
+	int result = 0;
+
+	size_t bytesSent = 0;
+	while (bytesSent < size)
+	{
+		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
+		if (tempBytesSent > 0) {
+			bytesSent += tempBytesSent;
+		}
+		else {
+			result = errno;
+			break;
+		}
+	}
+
+	return result;
+}
+
 static void createServerErrorHandler(HttpServerPtr *sv)
 {
     free(*sv);
@@ -253,7 +279,9 @@ static void createServerErrorHandler(HttpServerPtr *sv)
     //printf("%s\n", strerror(errno));
 }
 
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //API---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 HttpServerPtr HttpServer_Create()
 {
@@ -375,13 +403,19 @@ void HttpServer_SendHtml(HttpRequestPtr request, const char *html)
 	response = malloc(strlen(responseTemplate1) + strlen(strNum) + strlen(responseTemplate2) + htmlLen + 1);
 	sprintf(response, "%s%s%s%s", responseTemplate1, strNum, responseTemplate2, html);
 	
-	write(request->sock, response, strlen(response));
+	myWrite(request->sock, response, strlen(response));
 	
 	free(response);
 }
 
+void HttpServer_SendResponse(HttpRequestPtr request, HttpResponsePtr response)
+{
+	myWrite(request->sock, response->buffer, response->size);
+}
+
 char* HttpServer_GetRequestUri(HttpRequestPtr request)
 {
+
 	char *beg = strchr(request->requestText, '/'), *end = (beg ? beg + strcspn(beg, " ") : NULL), *result = NULL;
 	if (beg && end)
 	{
@@ -392,7 +426,7 @@ char* HttpServer_GetRequestUri(HttpRequestPtr request)
 	return result;
 }
 
-const char* HttpServer_GetError(HttpServerPtr server)
+const char* HttpServer_GetErrorMessage(HttpServerPtr server)
 {
 	return server->errorMsg;
 }
