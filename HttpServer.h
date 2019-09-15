@@ -7,7 +7,24 @@ enum State
 	Stopped
 };
 
-enum HttpResponseField
+enum ServerError
+{
+	ServerError_Success,
+	ServerError_ThreadCreationError,
+	ServerError_StartError,
+	ServerError_Running
+};
+
+enum ResponseError
+{
+	ResponseError_Success,
+	ResponseError_AllocationFailed,
+	ResponseError_InvalidStatusCode,
+	ResponseError_InvalidHttpVersion,
+	ResponseError_WriteFailed,
+};
+
+enum HttpResponseField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_response_fields
 {
 	HttpResponseField_AccessControlAllowOrigin,
 	HttpResponseField_AccessControlAllowCredentials,
@@ -29,7 +46,7 @@ enum HttpResponseField
 	HttpResponseField_ContentLocation,
 	HttpResponseField_ContentMD5,
 	HttpResponseField_ContentRange,
-	HttpResponseField_ContentType,
+	HttpResponseField_ContentType, //https://developer.mozilla.org/es/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Lista_completa_de_tipos_MIME
 	HttpResponseField_Date,
 	HttpResponseField_DeltaBase,
 	HttpResponseField_ETag,
@@ -67,15 +84,17 @@ void HttpServer_Start(HttpServerHandle server);
 void HttpServer_Destroy(HttpServerHandle server);
 void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback);
 int HttpServer_GetStatus(HttpServerHandle server);
+const char* HttpServer_GetErrorMessage(HttpServerHandle server);
 
-HttpResponseHandle HttpServer_CreateResponse();
+HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);
 void HttpServer_DestroyResponse(HttpResponseHandle response);
-void HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value);
-void HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength);
+int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCode);
+int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value);
+int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength);
+int HttpServer_SendResponse(HttpResponseHandle response);
+const char* HttpServer_GetResponseError(HttpResponseHandle response);
 
 void HttpServer_SendHtml(HttpRequestHandle request, const char *html);
-void HttpServer_SendResponse(HttpRequestHandle request, HttpResponseHandle response);
 char* HttpServer_GetRequestUri(HttpRequestHandle request);
-const char* HttpServer_GetErrorMessage(HttpServerHandle server);
 
 #endif

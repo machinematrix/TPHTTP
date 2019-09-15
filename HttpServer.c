@@ -46,66 +46,24 @@ struct HttpServer
 	HandlerSlot *handlerVector;
 	size_t handlerVectorSize;
 	size_t handlerVectorCapacity;
-	const char *errorMsg;
+	int errorCode;
+	//const char *errorMsg;
 };
 
 struct HttpRequest
 {
 	Socket sock;
 	const char *requestText;
+	HttpServerHandle server; //Cuidado con esto, server puede ser destruido mientras atiendo un pedido
 };
 
 struct HttpResponse
 {
-	/*char *accessControlAllowOrigin;
-	char *accessControlAllowCredentials;
-	char *accessControlExposeHeaders;
-	char *accessControlMaxAge;
-	char *accessControlAllowMethods;
-	char *accessControlAllowHeaders;
-	char *acceptPatch;
-	char *acceptRanges;
-	char *age;
-	char *allow;
-	char *altSvc;
-	char *cacheControl;
-	char *connection;
-	char *contentDisposition;
-	char *contentEncoding;
-	char *contentLanguage;
-	char *contentLength;
-	char *contentLocation;
-	char *contentMD5;
-	char *contentRange;
-	char *contentType;
-	char *date;
-	char *deltaBase;
-	char *eTag;
-	char *expires;
-	char *im;
-	char *lastModified;
-	char *link;
-	char *location;
-	char *p3p;
-	char *pragma;
-	char *proxyAuthenticate;
-	char *publicKeyPins;
-	char *retryAfter;
-	char *server;
-	char *setCookie;
-	char *strictTransportSecurity;
-	char *trailer;
-	char *transferEncoding;
-	char *tk;
-	char *upgrade;
-	char *vary;
-	char *via;
-	char *warning;
-	char *wwwAuthenticate;
-	char *xFrameOptions;*/
-
+	int errorCode;
+	Socket sock;
+	char *version;
+	char *statusCode;
 	char *fields[HttpResponseField_XFrameOptions + 1];
-
 	char *body;
 	size_t bodySize;
 };
@@ -115,6 +73,19 @@ typedef struct
 	Socket sock;
 	HttpServerHandle server;
 } HttpRequestInfo;
+
+static int integerDigitCount(size_t num)
+{
+	int result = 0;
+
+	while (num > 0)
+	{
+		++result;
+		num /= 10;
+	}
+
+	return result;
+}
 
 static void HttpServerSetStatus(HttpServerHandle sv, int state)
 {
@@ -262,7 +233,7 @@ static void *httpParser(void *arg)
 
 			if (handlerIndex != -1u)
 			{
-				struct HttpRequest req = { info->sock, request };
+				struct HttpRequest req = { info->sock, request, info->server };
 				info->server->handlerVector[handlerIndex].callback(&req);
 			}
 			else {
@@ -307,7 +278,7 @@ static void* serverProcedure(void *arg)
 	}
 	else {
 		HttpServerSetStatus(svData, Stopped);
-		svData->errorMsg = "listen() failed";
+		svData->errorCode = ServerError_StartError;
 		return NULL;
 	}
 
@@ -461,8 +432,7 @@ HttpServerHandle HttpServer_Create()
     
 	sv->queueLength = 5;
     sv->sock = socket(AF_INET, SOCK_STREAM, 0);
-	sv->handlerVector = NULL;
-	sv->handlerVectorSize = sv->handlerVectorCapacity = 0;
+	sv->status = Stopped;
 
     if(!createMutex(sv->mtx) && sv->sock != -1 && !setsockopt(sv->sock, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)))
     {
@@ -478,7 +448,7 @@ HttpServerHandle HttpServer_Create()
 		{
 		    if((bindResult = bind(sv->sock, list->ai_addr, sizeof(struct addrinfo))) != -1)
 		    {
-				HttpServerSetStatus(sv, Stopped);
+				//HttpServerSetStatus(sv, Stopped);
 		    }
 		    else {
 		        close(sv->sock);
@@ -498,13 +468,13 @@ HttpServerHandle HttpServer_Create()
 
 void HttpServer_Start(HttpServerHandle server)
 {
-	server->errorMsg = NULL;
+	server->errorCode = ServerError_Success;
 	HttpServerSetStatus(server, Running);
 	server->serverThread = createThread(serverProcedure, PTHREAD_CREATE_JOINABLE, server); //creacion de thread puede fallar
 	
 	if (!server->serverThread) {
 		HttpServerSetStatus(server, Stopped);
-		server->errorMsg = "Could not create server thread";
+		server->errorCode = ServerError_ThreadCreationError;
 	}
 }
 
@@ -533,7 +503,7 @@ void HttpServer_Destroy(HttpServerHandle server)
 
 void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback)
 {
-	server->errorMsg = NULL;
+	server->errorCode = ServerError_Success;
 	if (HttpServer_GetStatus(server) != Running)
 	{
 		size_t i;
@@ -556,7 +526,7 @@ void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resourc
 		strcpy(slot->context, resource);
 	}
 	else {
-		server->errorMsg = "Can't set handler while server is running";
+		server->errorCode = ServerError_Running;
 	}
 }
 
@@ -568,9 +538,38 @@ int HttpServer_GetStatus(HttpServerHandle server)
 	return result;
 }
 
-HttpResponseHandle HttpServer_CreateResponse()
+const char *HttpServer_GetErrorMessage(HttpServerHandle server)
 {
-	return calloc(1, sizeof(struct HttpResponse));
+	switch (server->errorCode)
+	{
+	case ServerError_Success:
+		return "Success";
+	case ServerError_ThreadCreationError:
+		return "Could not create server thread";
+	case ServerError_StartError:
+		return "Could not start server";
+	case ServerError_Running:
+		return "Can't set handler while server is running";
+	default:
+		return "";
+	}
+}
+
+HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request)
+{
+	HttpResponseHandle result = calloc(1, sizeof(struct HttpResponse));
+	
+	if (result)
+	{
+		const char *version = "1.1";
+		size_t versionLength = strlen(version);
+		result->sock = request->sock;
+		result->version = malloc(versionLength + 1);
+		strcpy(result->version, version);
+		result->version[versionLength] = 0;
+	}
+
+	return result;
 }
 
 void HttpServer_DestroyResponse(HttpResponseHandle response)
@@ -578,28 +577,141 @@ void HttpServer_DestroyResponse(HttpResponseHandle response)
 	if (response)
 	{
 		size_t i;
-		free(response->body);
+		free(response->version);
+		free(response->statusCode);
 
 		for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i)
 			free(response->fields[i]);
 
+		free(response->body);
 		free(response);
 	}
 }
 
-void HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value)
+int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCode)
 {
-	free(response->fields[field]);
-	response->fields[field] = malloc(strlen(value) + 1);
-	strcpy(response->fields[field], value);
+	int result = 1;
+	response->errorCode = ResponseError_Success;
+
+	if (statusCode <= 599) {
+		if ((response->statusCode = malloc((size_t)(integerDigitCount((size_t)statusCode) + 1)))) {
+			sprintf(response->statusCode, "%d", statusCode);
+		}
+		else {
+			response->errorCode = ResponseError_AllocationFailed;
+			result = 0;
+		}
+	}
+	else {
+		response->errorCode = ResponseError_InvalidStatusCode;
+		result = 0;
+	}
+
+	return result;
 }
 
-void HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength)
+int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value)
 {
-	free(response->body);
-	response->body = malloc(bodyLength);
-	response->bodySize = bodyLength;
-	memcpy(response->body, body, bodyLength);
+	int result = 0;
+	void *fieldTemp = malloc(strlen(value) + 1);
+
+	response->errorCode = ResponseError_Success;
+	if (fieldTemp) {
+		free(response->fields[field]);
+		response->fields[field] = fieldTemp;
+		strcpy(response->fields[field], value);
+		result = 1;
+	}
+	else
+		response->errorCode = ResponseError_AllocationFailed;
+
+	return result;
+}
+
+int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength)
+{
+	int result = 0;
+	void *bodyTemp = malloc(bodyLength);
+
+	response->errorCode = ResponseError_Success;
+	if (bodyTemp)
+	{
+		free(response->body);
+		response->body = bodyTemp;
+		response->bodySize = bodyLength;
+		memcpy(response->body, body, bodyLength);
+		result = 1;
+	}
+	else
+		response->errorCode = ResponseError_AllocationFailed;
+
+	return result;
+}
+
+int HttpServer_SendResponse(HttpResponseHandle response)
+{
+	if (!response->version) {
+		response->errorCode = ResponseError_InvalidHttpVersion;
+		return 0;
+	}
+	if (!response->statusCode) {
+		response->errorCode = ResponseError_InvalidStatusCode;
+		return 0;
+	}
+
+	char *preparedResponse, responseBegin[] = "HTTP/"; //agregar principio del header en estructura
+	size_t i, offset = 0, responseSize = response->bodySize + strlen(responseBegin) + strlen(response->version) + 1 + strlen(response->statusCode) + 2 + 2; //+2 is 2 bytes needed for header end
+
+	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
+		if (response->fields[i])
+			responseSize += strlen(getHttpResponseFieldText((int)i)) + strlen(response->fields[i]) + 2; //+2 is /r/n
+	}
+
+	if ((preparedResponse = malloc(responseSize)))
+	{
+		offset += (size_t)sprintf(preparedResponse + offset, "%s%s %s\r\n", responseBegin, response->version, response->statusCode);
+
+		for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
+			if (response->fields[i])
+				offset += (size_t)sprintf(preparedResponse + offset, "%s%s\r\n", getHttpResponseFieldText((int)i), response->fields[i]);
+		}
+		offset += (size_t)sprintf(preparedResponse + offset, "\r\n"); //fin del header. escribo 2 bytes porque el bucle, o la primera linea, ya ponen /r/n al principio
+
+		if (response->body)
+			memcpy(preparedResponse + offset, response->body, response->bodySize); //escribir body
+
+		if (myWrite(response->sock, preparedResponse, responseSize)) {
+			response->errorCode = ResponseError_WriteFailed;
+			free(preparedResponse);
+			return 0;
+		}
+
+		free(preparedResponse);
+		return 1;
+	}
+	else {
+		response->errorCode = ResponseError_AllocationFailed;
+		return 0;
+	}
+}
+
+const char *HttpServer_GetResponseError(HttpResponseHandle response)
+{
+	switch (response->errorCode)
+	{
+	case ResponseError_Success:
+		return "Success";
+	case ResponseError_AllocationFailed:
+		return "Memory allocation failed, download more RAM";
+	case ResponseError_InvalidStatusCode:
+		return "Invalid status code in response";
+	case ResponseError_InvalidHttpVersion:
+		return "Invalid HTTP version in response";
+	case ResponseError_WriteFailed:
+		return "Write failed";
+	default:
+		return "";
+	}
 }
 
 void HttpServer_SendHtml(HttpRequestHandle request, const char *html)
@@ -617,31 +729,6 @@ void HttpServer_SendHtml(HttpRequestHandle request, const char *html)
 	free(response);
 }
 
-void HttpServer_SendResponse(HttpRequestHandle request, HttpResponseHandle response)
-{
-	char *parsedResponse, responseBegin[] = "HTTP/1.1 200 OK\r\n"; //agregar principio del header en estructura
-	size_t responseSize = response->bodySize + strlen(responseBegin) + 4, i, offset = 0; //+4 is 4 bytes needed for header end
-
-	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
-		if(response->fields[i])
-			responseSize += strlen(getHttpResponseFieldText((int)i)) + strlen(response->fields[i]) + 2; //+2 is /r/n
-	}
-
-	parsedResponse = malloc(responseSize);
-
-	offset += (size_t)sprintf(parsedResponse, "%s", responseBegin); //escribir principio del header
-	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
-		if (response->fields[i])
-			offset += (size_t)sprintf(parsedResponse + offset, "%s%s\r\n", getHttpResponseFieldText((int)i), response->fields[i]);
-	}
-	offset += (size_t)sprintf(parsedResponse + offset, "\r\n"); //fin del header. escribo 2 bytes porque el bucle, o responseBegin, ya ponen /r/n al principio
-	memcpy(parsedResponse + offset, response->body, response->bodySize); //escribir body
-
-	myWrite(request->sock, parsedResponse, responseSize);
-	
-	free(parsedResponse);
-}
-
 char* HttpServer_GetRequestUri(HttpRequestHandle request)
 {
 
@@ -653,9 +740,4 @@ char* HttpServer_GetRequestUri(HttpRequestHandle request)
 		result[end - beg] = 0; //null character
 	}
 	return result;
-}
-
-const char* HttpServer_GetErrorMessage(HttpServerHandle server)
-{
-	return server->errorMsg;
 }
