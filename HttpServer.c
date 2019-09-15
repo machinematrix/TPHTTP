@@ -104,7 +104,7 @@ struct HttpResponse
 	char *wwwAuthenticate;
 	char *xFrameOptions;*/
 
-	const char *fields[HttpResponseField_X_Frame_Options + 1];
+	char *fields[HttpResponseField_XFrameOptions + 1];
 
 	char *body;
 	size_t bodySize;
@@ -113,10 +113,10 @@ struct HttpResponse
 typedef struct
 {
 	Socket sock;
-	HttpServerPtr server;
+	HttpServerHandle server;
 } HttpRequestInfo;
 
-static void HttpServerSetStatus(HttpServerPtr sv, int state)
+static void HttpServerSetStatus(HttpServerHandle sv, int state)
 {
 	lockMutex(sv->mtx);
 	sv->status = state;
@@ -260,7 +260,7 @@ static void *httpParser(void *arg)
 				}
 			}
 
-			if (handlerIndex != -1)
+			if (handlerIndex != -1u)
 			{
 				struct HttpRequest req = { info->sock, request };
 				info->server->handlerVector[handlerIndex].callback(&req);
@@ -274,20 +274,19 @@ static void *httpParser(void *arg)
 				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
 				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
 			}*/
+			free(resource);
 		}
-
-		free(resource);
+		free(request);
 	}
 
 	close(info->sock);
-	free(request);
 	free(info);
 	return NULL;
 }
 
 static void* serverProcedure(void *arg)
 {
-    HttpServerPtr svData = arg;
+    HttpServerHandle svData = arg;
     
 	if (!listen(svData->sock, svData->queueLength))
 	{
@@ -316,7 +315,7 @@ static void* serverProcedure(void *arg)
     return NULL;
 }
 
-static char poke(HttpServerPtr data) //returns 1 if it could poke server, 0 otherwise
+static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 otherwise
 {
 	char result = 0;
 	Socket socketHandle = socket(AF_INET, SOCK_STREAM, 0);
@@ -344,7 +343,7 @@ static char poke(HttpServerPtr data) //returns 1 if it could poke server, 0 othe
 	return result;
 }
 
-static void createServerErrorHandler(HttpServerPtr *sv)
+static void createServerErrorHandler(HttpServerHandle *sv)
 {
     free(*sv);
     *sv = NULL;
@@ -355,51 +354,51 @@ static const char *getHttpResponseFieldText(int field)
 {
 	switch (field)
 	{
-	case HttpResponseField_Access_Control_Allow_Origin:
+	case HttpResponseField_AccessControlAllowOrigin:
 		return "Access-Control-Allow-Origin: ";
-	case HttpResponseField_Access_Control_Allow_Credentials:
+	case HttpResponseField_AccessControlAllowCredentials:
 		return "Access-Control-Allow-Credentials: ";
-	case HttpResponseField_Access_Control_Expose_Headers:
+	case HttpResponseField_AccessControlExposeHeaders:
 		return "Access-Control-Expose-Headers: ";
-	case HttpResponseField_Access_Control_Max_Age:
+	case HttpResponseField_AccessControlMaxAge:
 		return "Access-Control-Max-Age: ";
-	case HttpResponseField_Access_Control_Allow_Methods:
+	case HttpResponseField_AccessControlAllowMethods:
 		return "Access-Control-Allow-Methods: ";
-	case HttpResponseField_Access_Control_Allow_Headers:
+	case HttpResponseField_AccessControlAllowHeaders:
 		return "Access-Control-Allow-Headers: ";
-	case HttpResponseField_Accept_Patch:
+	case HttpResponseField_AcceptPatch:
 		return "Accept-Patch: ";
-	case HttpResponseField_Accept_Ranges:
+	case HttpResponseField_AcceptRanges:
 		return "Accept-Ranges: ";
 	case HttpResponseField_Age:
 		return "Age: ";
 	case HttpResponseField_Allow:
 		return "Allow: ";
-	case HttpResponseField_Alt_Svc:
+	case HttpResponseField_AltSvc:
 		return "Alt-Svc: ";
-	case HttpResponseField_Cache_Control:
+	case HttpResponseField_CacheControl:
 		return "Cache-Control: ";
 	case HttpResponseField_Connection:
 		return "Connection: ";
-	case HttpResponseField_Content_Disposition:
+	case HttpResponseField_ContentDisposition:
 		return "Content-Disposition: ";
-	case HttpResponseField_Content_Encoding:
+	case HttpResponseField_ContentEncoding:
 		return "Content-Encoding: ";
-	case HttpResponseField_Content_Language:
+	case HttpResponseField_ContentLanguage:
 		return "Content-Language: ";
-	case HttpResponseField_Content_Length:
+	case HttpResponseField_ContentLength:
 		return "Content-Length: ";
-	case HttpResponseField_Content_Location:
+	case HttpResponseField_ContentLocation:
 		return "Content-Location: ";
-	case HttpResponseField_Content_MD5:
+	case HttpResponseField_ContentMD5:
 		return "Content-MD5: ";
-	case HttpResponseField_Content_Range:
+	case HttpResponseField_ContentRange:
 		return "Content-Range: ";
-	case HttpResponseField_Content_Type:
+	case HttpResponseField_ContentType:
 		return "Content-Type: ";
 	case HttpResponseField_Date:
 		return "Date: ";
-	case HttpResponseField_Delta_Base:
+	case HttpResponseField_DeltaBase:
 		return "Delta-Base: ";
 	case HttpResponseField_ETag:
 		return "ETag: ";
@@ -407,7 +406,7 @@ static const char *getHttpResponseFieldText(int field)
 		return "Expires: ";
 	case HttpResponseField_IM:
 		return "IM: ";
-	case HttpResponseField_Last_Modified:
+	case HttpResponseField_LastModified:
 		return "Last-Modified: ";
 	case HttpResponseField_Link:
 		return "Link: ";
@@ -417,21 +416,21 @@ static const char *getHttpResponseFieldText(int field)
 		return "P3P: ";
 	case HttpResponseField_Pragma:
 		return "Pragma: ";
-	case HttpResponseField_Proxy_Authenticate:
+	case HttpResponseField_ProxyAuthenticate:
 		return "Proxy-Authenticate: ";
-	case HttpResponseField_Public_Key_Pins:
+	case HttpResponseField_PublicKeyPins:
 		return "Public-Key-Pins: ";
-	case HttpResponseField_Retry_After:
+	case HttpResponseField_RetryAfter:
 		return "Retry-After: ";
 	case HttpResponseField_Server:
 		return "Server: ";
-	case HttpResponseField_Set_Cookie:
+	case HttpResponseField_SetCookie:
 		return "Set-Cookie: ";
-	case HttpResponseField_Strict_Transport_Security:
+	case HttpResponseField_StrictTransportSecurity:
 		return "Strict-Transport-Security: ";
 	case HttpResponseField_Trailer:
 		return "Trailer: ";
-	case HttpResponseField_Transfer_Encoding:
+	case HttpResponseField_TransferEncoding:
 		return "Transfer-Encoding: ";
 	case HttpResponseField_Tk:
 		return "Tk: ";
@@ -443,9 +442,9 @@ static const char *getHttpResponseFieldText(int field)
 		return "Via: ";
 	case HttpResponseField_Warning:
 		return "Warning: ";
-	case HttpResponseField_WWW_Authenticate:
+	case HttpResponseField_WWWAuthenticate:
 		return "WWW-Authenticate: ";
-	case HttpResponseField_X_Frame_Options:
+	case HttpResponseField_XFrameOptions:
 		return "X-Frame-Options: ";
 	default:
 		return NULL;
@@ -456,9 +455,9 @@ static const char *getHttpResponseFieldText(int field)
 //API---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-HttpServerPtr HttpServer_Create()
+HttpServerHandle HttpServer_Create()
 {
-    HttpServerPtr sv = calloc(1, sizeof(struct HttpServer));
+    HttpServerHandle sv = calloc(1, sizeof(struct HttpServer));
     
 	sv->queueLength = 5;
     sv->sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -497,7 +496,7 @@ HttpServerPtr HttpServer_Create()
     return sv;
 }
 
-void HttpServer_Start(HttpServerPtr server)
+void HttpServer_Start(HttpServerHandle server)
 {
 	server->errorMsg = NULL;
 	HttpServerSetStatus(server, Running);
@@ -509,27 +508,30 @@ void HttpServer_Start(HttpServerPtr server)
 	}
 }
 
-void HttpServer_Destroy(HttpServerPtr server)
+void HttpServer_Destroy(HttpServerHandle server)
 {
-	size_t i;
-	if (HttpServer_GetStatus(server) == Running) {
-		HttpServerSetStatus(server, Stopped); //To break the loop
-		poke(server);
+	if (server)
+	{
+		size_t i;
+		if (HttpServer_GetStatus(server) == Running) {
+			HttpServerSetStatus(server, Stopped); //To break the loop
+			poke(server);
+		}
+
+		joinThread(server->serverThread);
+		assert(!close(server->sock));
+		deleteMutex(server->mtx);
+
+		for (i = 0; i < server->handlerVectorSize; ++i) {
+			free(server->handlerVector[i].context);
+		}
+		free(server->handlerVector);
+
+		free(server);
 	}
-
-    joinThread(server->serverThread);
-	assert(!close(server->sock));
-    deleteMutex(server->mtx);
-
-	for (i = 0; i < server->handlerVectorSize; ++i) {
-		free(server->handlerVector[i].context);
-	}
-	free(server->handlerVector);
-
-    free(server);
 }
 
-void HttpServer_SetEndpointCallback(HttpServerPtr server, const char *resource, HandlerCallback callback)
+void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback)
 {
 	server->errorMsg = NULL;
 	if (HttpServer_GetStatus(server) != Running)
@@ -558,7 +560,7 @@ void HttpServer_SetEndpointCallback(HttpServerPtr server, const char *resource, 
 	}
 }
 
-int HttpServer_GetStatus(HttpServerPtr server)
+int HttpServer_GetStatus(HttpServerHandle server)
 {
 	lockMutex(server->mtx);
 	int result = server->status;
@@ -566,33 +568,41 @@ int HttpServer_GetStatus(HttpServerPtr server)
 	return result;
 }
 
-HttpResponsePtr HttpServer_CreateResponse()
+HttpResponseHandle HttpServer_CreateResponse()
 {
 	return calloc(1, sizeof(struct HttpResponse));
 }
 
-void HttpServer_DestroyResponse(HttpResponsePtr response)
+void HttpServer_DestroyResponse(HttpResponseHandle response)
 {
-	free(response->body);
-	free(response);
+	if (response)
+	{
+		size_t i;
+		free(response->body);
+
+		for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i)
+			free(response->fields[i]);
+
+		free(response);
+	}
 }
 
-void HttpServer_SetResponseField(HttpResponsePtr response, int field, const char *value)
+void HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value)
 {
 	free(response->fields[field]);
 	response->fields[field] = malloc(strlen(value) + 1);
 	strcpy(response->fields[field], value);
 }
 
-void HttpServer_SetResponseBody(HttpResponsePtr response, const void *body, size_t bodyLength)
+void HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength)
 {
-	free(body);
+	free(response->body);
 	response->body = malloc(bodyLength);
 	response->bodySize = bodyLength;
 	memcpy(response->body, body, bodyLength);
 }
 
-void HttpServer_SendHtml(HttpRequestPtr request, const char *html)
+void HttpServer_SendHtml(HttpRequestHandle request, const char *html)
 {
 	const char *responseTemplate1 = "HTTP/1.1 200 OK\r\nContent-Type:text/html\r\nContent-Length: ", *responseTemplate2 = "\r\nConnection: close\r\n\r\n";
 	char strNum[16], *response;
@@ -607,12 +617,32 @@ void HttpServer_SendHtml(HttpRequestPtr request, const char *html)
 	free(response);
 }
 
-void HttpServer_SendResponse(HttpRequestPtr request, HttpResponsePtr response)
+void HttpServer_SendResponse(HttpRequestHandle request, HttpResponseHandle response)
 {
-	myWrite(request->sock, response->body, response->bodySize);
+	char *parsedResponse, responseBegin[] = "HTTP/1.1 200 OK\r\n"; //agregar principio del header en estructura
+	size_t responseSize = response->bodySize + strlen(responseBegin) + 4, i, offset = 0; //+4 is 4 bytes needed for header end
+
+	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
+		if(response->fields[i])
+			responseSize += strlen(getHttpResponseFieldText((int)i)) + strlen(response->fields[i]) + 2; //+2 is /r/n
+	}
+
+	parsedResponse = malloc(responseSize);
+
+	offset += (size_t)sprintf(parsedResponse, "%s", responseBegin); //escribir principio del header
+	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
+		if (response->fields[i])
+			offset += (size_t)sprintf(parsedResponse + offset, "%s%s\r\n", getHttpResponseFieldText((int)i), response->fields[i]);
+	}
+	offset += (size_t)sprintf(parsedResponse + offset, "\r\n"); //fin del header. escribo 2 bytes porque el bucle, o responseBegin, ya ponen /r/n al principio
+	memcpy(parsedResponse + offset, response->body, response->bodySize); //escribir body
+
+	myWrite(request->sock, parsedResponse, responseSize);
+	
+	free(parsedResponse);
 }
 
-char* HttpServer_GetRequestUri(HttpRequestPtr request)
+char* HttpServer_GetRequestUri(HttpRequestHandle request)
 {
 
 	char *beg = strchr(request->requestText, '/'), *end = (beg ? beg + strcspn(beg, " ") : NULL), *result = NULL;
@@ -625,7 +655,7 @@ char* HttpServer_GetRequestUri(HttpRequestPtr request)
 	return result;
 }
 
-const char* HttpServer_GetErrorMessage(HttpServerPtr server)
+const char* HttpServer_GetErrorMessage(HttpServerHandle server)
 {
 	return server->errorMsg;
 }
