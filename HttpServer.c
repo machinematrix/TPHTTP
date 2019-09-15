@@ -47,14 +47,19 @@ struct HttpServer
 	size_t handlerVectorSize;
 	size_t handlerVectorCapacity;
 	int errorCode;
-	//const char *errorMsg;
 };
 
 struct HttpRequest
 {
 	Socket sock;
 	const char *requestText;
-	HttpServerHandle server; //Cuidado con esto, server puede ser destruido mientras atiendo un pedido
+	//HttpServerHandle server; //Cuidado con esto, server puede ser destruido mientras atiendo un pedido
+	
+	char *version;
+	char *resource;
+	char *fields[HttpRequestField_Warning + 1];
+	char *body;
+	size_t bodySize;
 };
 
 struct HttpResponse
@@ -196,6 +201,15 @@ static char* getResourceText(char *requestText)
 	return result;
 }
 
+static struct HttpRequest makeRequest(char *requestText)
+{
+	struct HttpRequest result = {};
+
+
+
+	return result;
+}
+
 static void *httpParser(void *arg)
 {
 	HttpRequestInfo *info = arg;
@@ -233,7 +247,7 @@ static void *httpParser(void *arg)
 
 			if (handlerIndex != -1u)
 			{
-				struct HttpRequest req = { info->sock, request, info->server };
+				struct HttpRequest req = { info->sock, request };
 				info->server->handlerVector[handlerIndex].callback(&req);
 			}
 			else {
@@ -321,7 +335,7 @@ static void createServerErrorHandler(HttpServerHandle *sv)
     //printf("%s\n", strerror(errno));
 }
 
-static const char *getHttpResponseFieldText(int field)
+static const char* getHttpResponseFieldText(int field)
 {
 	switch (field)
 	{
@@ -422,8 +436,96 @@ static const char *getHttpResponseFieldText(int field)
 	}
 }
 
+static const char* getHttpRequestFieldText(int field)
+{
+	switch (field)
+	{
+	case HttpRequestField_AIM:
+		return "A-IM";
+	case HttpRequestField_Accept:
+		return "Accept";
+	case HttpRequestField_AcceptCharset:
+		return "Accept-Charset";
+	case HttpRequestField_AcceptDatetime:
+		return "Accept-Datetime";
+	case HttpRequestField_AcceptEncoding:
+		return "Accept-Encoding";
+	case HttpRequestField_AcceptLanguage:
+		return "Accept-Language";
+	case HttpRequestField_AccessControlRequestMethod:
+		return "Access-Control-Request-Method";
+	case HttpRequestField_AccessControlRequestHeaders:
+		return "Access-Control-Request-Method";
+    case HttpRequestField_Authorization:
+		return "Authorization";
+    case HttpRequestField_CacheControl:
+		return "Cache-Control";
+    case HttpRequestField_Connection:
+		return "Connection";
+    case HttpRequestField_ContentLength:
+		return "Content-Length";
+    case HttpRequestField_ContentMD5:
+		return "Content-MD5";
+    case HttpRequestField_ContentType:
+		return "Content-Type";
+    case HttpRequestField_Cookie:
+		return "Content-Cookie";
+    case HttpRequestField_Date:
+		return "Date";
+    case HttpRequestField_Expect:
+		return "Expect";
+    case HttpRequestField_Forwarded:
+		return "Forwarded";
+    case HttpRequestField_From:
+		return "From";
+    case HttpRequestField_Host:
+		return "Host";
+    case HttpRequestField_HTTP2Settings:
+		return "HTTP2-Settings";
+    case HttpRequestField_IfMatch:
+		return "If-Match";
+    case HttpRequestField_IfModifiedSince:
+		return "If-Modified-Since";
+    case HttpRequestField_IfNoneMatch:
+		return "If-None-Match";
+    case HttpRequestField_IfRange:
+		return "If-Range";
+    case HttpRequestField_IfUnmodifiedSince:
+		return "If-Unmodified-Since";
+    case HttpRequestField_MaxForwards:
+		return "Max-Forwards";
+    case HttpRequestField_Origin:
+		return "Origin";
+    case HttpRequestField_Pragma:
+		return "Pragma";
+    case HttpRequestField_ProxyAuthorization:
+		return "Proxy-Authorization";
+    case HttpRequestField_Range:
+		return "Range";
+    case HttpRequestField_Referer:
+		return "Referer";
+    case HttpRequestField_TE:
+		return "TE";
+    case HttpRequestField_Trailer:
+		return "Trailer";
+    case HttpRequestField_TransferEncoding:
+		return "Transfer-Encoding";
+    case HttpRequestField_UserAgent:
+		return "User-Agent";
+    case HttpRequestField_Upgrade:
+		return "Upgrade";
+    case HttpRequestField_Via:
+		return "Via";
+    case HttpRequestField_Warning:
+		return "Warning";
+	default:
+		return NULL;
+	}
+}
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //API---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 HttpServerHandle HttpServer_Create()
@@ -543,7 +645,7 @@ int HttpServer_GetStatus(HttpServerHandle server)
 	return result;
 }
 
-const char *HttpServer_GetErrorMessage(HttpServerHandle server)
+const char *HttpServer_GetServerError(HttpServerHandle server)
 {
 	switch (server->errorCode)
 	{

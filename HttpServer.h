@@ -25,6 +25,49 @@ enum ResponseError
 	ResponseError_WriteFailed,
 };
 
+enum HttpRequestField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_request_fields
+{
+	HttpRequestField_AIM,
+	HttpRequestField_Accept,
+	HttpRequestField_AcceptCharset,
+	HttpRequestField_AcceptDatetime,
+	HttpRequestField_AcceptEncoding,
+	HttpRequestField_AcceptLanguage,
+	HttpRequestField_AccessControlRequestMethod,
+	HttpRequestField_AccessControlRequestHeaders,
+	HttpRequestField_Authorization,
+	HttpRequestField_CacheControl,
+	HttpRequestField_Connection,
+	HttpRequestField_ContentLength,
+	HttpRequestField_ContentMD5,
+	HttpRequestField_ContentType,
+	HttpRequestField_Cookie,
+	HttpRequestField_Date,
+	HttpRequestField_Expect,
+	HttpRequestField_Forwarded,
+	HttpRequestField_From,
+	HttpRequestField_Host,
+	HttpRequestField_HTTP2Settings,
+	HttpRequestField_IfMatch,
+	HttpRequestField_IfModifiedSince,
+	HttpRequestField_IfNoneMatch,
+	HttpRequestField_IfRange,
+	HttpRequestField_IfUnmodifiedSince,
+	HttpRequestField_MaxForwards,
+	HttpRequestField_Origin,
+	HttpRequestField_Pragma,
+	HttpRequestField_ProxyAuthorization,
+	HttpRequestField_Range,
+	HttpRequestField_Referer,
+	HttpRequestField_TE,
+	HttpRequestField_Trailer,
+	HttpRequestField_TransferEncoding,
+	HttpRequestField_UserAgent,
+	HttpRequestField_Upgrade,
+	HttpRequestField_Via,
+	HttpRequestField_Warning,
+};
+
 enum HttpResponseField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_response_fields
 {
 	HttpResponseField_AccessControlAllowOrigin,
@@ -85,7 +128,7 @@ void HttpServer_Start(HttpServerHandle server);
 void HttpServer_Destroy(HttpServerHandle server);
 int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback);
 int HttpServer_GetStatus(HttpServerHandle server);
-const char* HttpServer_GetErrorMessage(HttpServerHandle server);
+const char* HttpServer_GetServerError(HttpServerHandle server);
 
 HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);
 void HttpServer_DestroyResponse(HttpResponseHandle response);
