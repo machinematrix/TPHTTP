@@ -501,8 +501,10 @@ void HttpServer_Destroy(HttpServerHandle server)
 	}
 }
 
-void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback)
+int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback)
 {
+	int result = 1;
+
 	server->errorCode = ServerError_Success;
 	if (HttpServer_GetStatus(server) != Running)
 	{
@@ -511,13 +513,13 @@ void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resourc
 		{
 			if (!strcmp(resource, server->handlerVector[i].context)) { //Si ya hay un slot para ese resource, sobreescribir su callback con la nueva
 				server->handlerVector[i].callback = callback;
-				return;
+				return result;
 			}
 		}
 
 		if (server->handlerVectorSize == server->handlerVectorCapacity) {
 			server->handlerVectorCapacity = (server->handlerVectorCapacity ? server->handlerVectorCapacity * 2 : 1);
-			server->handlerVector = realloc(server->handlerVector, server->handlerVectorCapacity * sizeof(HandlerSlot));
+			server->handlerVector = realloc(server->handlerVector, server->handlerVectorCapacity * sizeof(HandlerSlot)); //add error handling
 		}
 
 		HandlerSlot *slot = server->handlerVector + server->handlerVectorSize++;
@@ -527,7 +529,10 @@ void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resourc
 	}
 	else {
 		server->errorCode = ServerError_Running;
+		result = 0;
 	}
+
+	return result;
 }
 
 int HttpServer_GetStatus(HttpServerHandle server)

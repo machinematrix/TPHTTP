@@ -12,7 +12,8 @@ enum ServerError
 	ServerError_Success,
 	ServerError_ThreadCreationError,
 	ServerError_StartError,
-	ServerError_Running
+	ServerError_Running,
+	ServerError_AllocationFailed,
 };
 
 enum ResponseError
@@ -82,7 +83,7 @@ typedef void(*HandlerCallback)(HttpRequestHandle);
 HttpServerHandle HttpServer_Create();
 void HttpServer_Start(HttpServerHandle server);
 void HttpServer_Destroy(HttpServerHandle server);
-void HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback);
+int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback);
 int HttpServer_GetStatus(HttpServerHandle server);
 const char* HttpServer_GetErrorMessage(HttpServerHandle server);
 
