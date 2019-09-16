@@ -52,7 +52,7 @@ struct HttpServer
 struct HttpRequest //make function to destroy this
 {
 	Socket sock;
-	const char *requestText;
+	//const char *requestText;
 	
 	char *method;
 	char *resource;
@@ -371,7 +371,7 @@ static char* getHttpRequestText(int sock)
 	} while (bytesRead > 0);
 
 	result = realloc(result, (size_t)offset + 1); //space for null terminator
-	result[offset] = 1; //set null terminator
+	result[offset] = 0; //set null terminator
 
 	return result;
 }
@@ -430,6 +430,12 @@ static struct HttpRequest makeRequest(const char *requestText) //Add error handl
 		}
 	}
 
+	//Get body
+	const char *bodyBegin = strstr(versionEnd, "\r\n\r\n") + 4, *bodyEnd = bodyBegin + strlen(bodyBegin); //Esto asume que requestText termina con '\0'
+	result.bodySize = (size_t)(bodyEnd - bodyBegin);
+	result.body = malloc(result.bodySize);
+	strcpy(result.body, bodyBegin);
+
 	return result;
 }
 
@@ -482,10 +488,10 @@ static void *httpParser(void *arg)
 
 			if (handlerIndex != -1u)
 			{
-				struct HttpRequest req2 = makeRequest(request);
-				struct HttpRequest req = { info->sock, request };
+				struct HttpRequest req = makeRequest(request);
+				//struct HttpRequest req = { info->sock, request };
 				info->server->handlerVector[handlerIndex].callback(&req);
-				destroyRequest(&req2);
+				destroyRequest(&req);
 			}
 			else {
 				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
@@ -886,15 +892,43 @@ void HttpServer_SendHtml(HttpRequestHandle request, const char *html)
 	free(response);
 }
 
-char* HttpServer_GetRequestUri(HttpRequestHandle request)
+const char *HttpServer_GetRequestMethod(HttpRequestHandle request)
 {
+	return request->method;
+}
 
-	char *beg = strchr(request->requestText, '/'), *end = (beg ? beg + strcspn(beg, " ") : NULL), *result = NULL;
-	if (beg && end)
-	{
-		result = malloc((size_t)(end - beg + 1));
-		memcpy(result, beg, (size_t)(end - beg));
-		result[end - beg] = 0; //null character
+const char* HttpServer_GetRequestUri(HttpRequestHandle request)
+{
+	return request->resource;
+	//char *beg = strchr(request->requestText, '/'), *end = (beg ? beg + strcspn(beg, " ") : NULL), *result = NULL;
+	//if (beg && end)
+	//{
+	//	result = malloc((size_t)(end - beg + 1));
+	//	memcpy(result, beg, (size_t)(end - beg));
+	//	result[end - beg] = 0; //null character
+	//}
+	//return result;
+}
+
+const char* HttpServer_GetRequestVersion(HttpRequestHandle request)
+{
+	return request->version;
+}
+
+const char* HttpServer_GetRequestField(HttpRequestHandle request, int field)
+{
+	if (field <= HttpRequestField_Warning) {
+		return request->fields[field];
 	}
-	return result;
+	else return NULL;
+}
+
+const void* HttpServer_GetRequestBody(HttpRequestHandle request)
+{
+	return request->body;
+}
+
+unsigned long long HttpServer_GetRequestBodySize(HttpRequestHandle request)
+{
+	return request->bodySize;
 }

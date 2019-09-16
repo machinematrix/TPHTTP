@@ -65,7 +65,7 @@ enum HttpRequestField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields
 	HttpRequestField_UserAgent,
 	HttpRequestField_Upgrade,
 	HttpRequestField_Via,
-	HttpRequestField_Warning,
+	HttpRequestField_Warning, //last field
 };
 
 enum HttpResponseField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_response_fields
@@ -139,6 +139,11 @@ int HttpServer_SendResponse(HttpResponseHandle response);
 const char* HttpServer_GetResponseError(HttpResponseHandle response);
 
 void HttpServer_SendHtml(HttpRequestHandle request, const char *html);
-char* HttpServer_GetRequestUri(HttpRequestHandle request);
+const char* HttpServer_GetRequestMethod(HttpRequestHandle request);
+const char* HttpServer_GetRequestUri(HttpRequestHandle request);
+const char* HttpServer_GetRequestVersion(HttpRequestHandle request);
+const char* HttpServer_GetRequestField(HttpRequestHandle request, int field);
+const void* HttpServer_GetRequestBody(HttpRequestHandle request);
+unsigned long long HttpServer_GetRequestBodySize(HttpRequestHandle request);
 
 #endif
