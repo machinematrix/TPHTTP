@@ -49,14 +49,14 @@ struct HttpServer
 	int errorCode;
 };
 
-struct HttpRequest
+struct HttpRequest //make function to destroy this
 {
 	Socket sock;
 	const char *requestText;
-	//HttpServerHandle server; //Cuidado con esto, server puede ser destruido mientras atiendo un pedido
 	
-	char *version;
+	char *method;
 	char *resource;
+	char *version;
 	char *fields[HttpRequestField_Warning + 1];
 	char *body;
 	size_t bodySize;
@@ -92,250 +92,7 @@ static int integerDigitCount(size_t num)
 	return result;
 }
 
-static void HttpServerSetStatus(HttpServerHandle sv, int state)
-{
-	lockMutex(sv->mtx);
-	sv->status = state;
-	unlockMutex(sv->mtx);
-}
-
-//static char* getHttpRequestHeader(int sock)
-//{
-//	ssize_t size = 64, offset = 0;
-//	size_t chunkSize = 32;
-//	char *result = calloc((size_t)size, sizeof(char));
-//	char cr = 0, nl = 0, cr2 = 0, nl2 = 0;
-//
-//	while (!(cr && nl && cr2 && nl2))
-//	{	
-//		if (offset == size) {
-//			size *= 2;
-//			result = realloc(result, (size_t)size);
-//		}
-//		offset += read(sock, result + (size_t)offset, 1);
-//		char token = result[offset - 1];
-//
-//		if (token != '\r' && token != '\n') {
-//			cr = nl = cr2 = nl2 = 0;
-//		}
-//		else
-//		{
-//			if (token == '\r') {
-//				if (!cr)
-//					cr = 1;
-//				else
-//					cr2 = 1;
-//			}
-//			else if (token == '\n') {
-//				if (!nl)
-//					nl = 1;
-//				else
-//					nl2 = 1;
-//			}
-//		}
-//	}
-//
-//	result = realloc(result, (size_t)offset + 1); //space for null terminator
-//	result[offset] = 0; //set null terminator
-//
-//	return result;
-//}
-
-static int myWrite(Socket sock, const void *buffer, size_t size)
-{
-	int result = 0;
-
-	size_t bytesSent = 0;
-	while (bytesSent < size)
-	{
-		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
-		if (tempBytesSent > 0) {
-			bytesSent += tempBytesSent;
-		}
-		else {
-			result = errno;
-			break;
-		}
-	}
-
-	return result;
-}
-
-//resultado es memoria dinamica
-static char* getHttpRequestText(int sock)
-{
-	ssize_t size = 256, offset = 0, bytesRead;
-	size_t chunkSize = ((size_t)size) / 2;
-	char *result = malloc((size_t)size);
-
-	do
-	{
-		if (offset >= size) {
-			size *= 2;
-			result = realloc(result, (size_t)size);
-		}
-
-		bytesRead = recv(sock, result + (size_t)offset, chunkSize, MSG_DONTWAIT);
-
-		if (bytesRead > 0) {
-			offset += bytesRead;
-		}
-	} while (bytesRead > 0);
-
-	result = realloc(result, (size_t)offset /*+ 1*/); //space for null terminator
-	//result[offset] = 1; //set null terminator
-
-	return result;
-}
-
-//resultado es memoria dinamica
-static char* getResourceText(char *requestText)
-{
-	char *beg = strchr(requestText, '/'), *end = (beg ? beg + strcspn(beg, " ?") : NULL), *result = NULL;
-	if (beg && end)
-	{
-		result = malloc((size_t)(end - beg + 1));
-		memcpy(result, beg, (size_t)(end - beg));
-		result[end - beg] = 0; //null character
-	}
-	return result;
-}
-
-static struct HttpRequest makeRequest(char *requestText)
-{
-	struct HttpRequest result = {};
-
-
-
-	return result;
-}
-
-static void *httpParser(void *arg)
-{
-	HttpRequestInfo *info = arg;
-	char *request = getHttpRequestText(info->sock);
-
-	if (request)
-	{
-		char *resource = getResourceText(request);
-
-		if (resource)
-		{
-			size_t i;
-			//char handled = 0;
-			size_t handlerIndex = -1u, bestMatchLength = 0;
-
-			for (i = 0; i < info->server->handlerVectorSize; ++i)
-			{
-				/*if (!strcmp(resource, info->server->handlerVector[i].resource)) {
-					struct HttpRequest req = { info->sock, request };
-					info->server->handlerVector[i].callback(&req);
-					handled = 1;
-				}*/
-				char *match = strstr(resource, info->server->handlerVector[i].context);
-				
-				if (match && match == resource) //si matcheo al principio del string
-				{ //Make a match function that doesn't make a literal compare. Instead, compare everything except slashes
-					size_t contextLength = strlen(info->server->handlerVector[i].context);
-
-					if (contextLength > bestMatchLength) {
-						handlerIndex = i;
-						bestMatchLength = contextLength;
-					}
-				}
-			}
-
-			if (handlerIndex != -1u)
-			{
-				struct HttpRequest req = { info->sock, request };
-				info->server->handlerVector[handlerIndex].callback(&req);
-			}
-			else {
-				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
-				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
-			}
-
-			/*if (!handled) {
-				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
-				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
-			}*/
-			free(resource);
-		}
-		free(request);
-	}
-
-	close(info->sock);
-	free(info);
-	return NULL;
-}
-
-static void* serverProcedure(void *arg)
-{
-    HttpServerHandle svData = arg;
-    
-	if (!listen(svData->sock, svData->queueLength))
-	{
-		while (HttpServer_GetStatus(svData) == Running)
-		{
-			struct sockaddr data = {};
-			socklen_t sockLen = sizeof(struct sockaddr);
-			int clientSocket = accept(svData->sock, &data, &sockLen);
-
-			if (clientSocket != -1)
-			{
-				HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
-				info->sock = clientSocket;
-				info->server = svData;
-				createThread(httpParser, PTHREAD_CREATE_JOINABLE, info);
-			}
-		}
-	}
-	else {
-		HttpServerSetStatus(svData, Stopped);
-		svData->errorCode = ServerError_StartError;
-		return NULL;
-	}
-
-	HttpServerSetStatus(svData, Stopped);
-    return NULL;
-}
-
-static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 otherwise
-{
-	char result = 0;
-	Socket socketHandle = socket(AF_INET, SOCK_STREAM, 0);
-
-	if (socketHandle != -1)
-	{
-		struct addrinfo *list = NULL, hint = {};
-
-		hint.ai_family = AF_INET;
-		hint.ai_socktype = SOCK_STREAM;
-		hint.ai_protocol = IPPROTO_TCP;
-
-		if (!getaddrinfo(NULL, "http", &hint, &list))
-		{
-			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
-				myWrite(socketHandle, "\r\n\r\n", 4);
-				result = 1;
-			}
-
-			freeaddrinfo(list);
-		}
-
-		close(socketHandle);
-	}
-	return result;
-}
-
-static void createServerErrorHandler(HttpServerHandle *sv)
-{
-    free(*sv);
-    *sv = NULL;
-    //printf("%s\n", strerror(errno));
-}
-
-static const char* getHttpResponseFieldText(int field)
+static const char *getHttpResponseFieldText(int field)
 {
 	switch (field)
 	{
@@ -436,7 +193,7 @@ static const char* getHttpResponseFieldText(int field)
 	}
 }
 
-static const char* getHttpRequestFieldText(int field)
+static const char *getHttpRequestFieldText(int field)
 {
 	switch (field)
 	{
@@ -456,72 +213,365 @@ static const char* getHttpRequestFieldText(int field)
 		return "Access-Control-Request-Method";
 	case HttpRequestField_AccessControlRequestHeaders:
 		return "Access-Control-Request-Method";
-    case HttpRequestField_Authorization:
+	case HttpRequestField_Authorization:
 		return "Authorization";
-    case HttpRequestField_CacheControl:
+	case HttpRequestField_CacheControl:
 		return "Cache-Control";
-    case HttpRequestField_Connection:
+	case HttpRequestField_Connection:
 		return "Connection";
-    case HttpRequestField_ContentLength:
+	case HttpRequestField_ContentLength:
 		return "Content-Length";
-    case HttpRequestField_ContentMD5:
+	case HttpRequestField_ContentMD5:
 		return "Content-MD5";
-    case HttpRequestField_ContentType:
+	case HttpRequestField_ContentType:
 		return "Content-Type";
-    case HttpRequestField_Cookie:
+	case HttpRequestField_Cookie:
 		return "Content-Cookie";
-    case HttpRequestField_Date:
+	case HttpRequestField_Date:
 		return "Date";
-    case HttpRequestField_Expect:
+	case HttpRequestField_Expect:
 		return "Expect";
-    case HttpRequestField_Forwarded:
+	case HttpRequestField_Forwarded:
 		return "Forwarded";
-    case HttpRequestField_From:
+	case HttpRequestField_From:
 		return "From";
-    case HttpRequestField_Host:
+	case HttpRequestField_Host:
 		return "Host";
-    case HttpRequestField_HTTP2Settings:
+	case HttpRequestField_HTTP2Settings:
 		return "HTTP2-Settings";
-    case HttpRequestField_IfMatch:
+	case HttpRequestField_IfMatch:
 		return "If-Match";
-    case HttpRequestField_IfModifiedSince:
+	case HttpRequestField_IfModifiedSince:
 		return "If-Modified-Since";
-    case HttpRequestField_IfNoneMatch:
+	case HttpRequestField_IfNoneMatch:
 		return "If-None-Match";
-    case HttpRequestField_IfRange:
+	case HttpRequestField_IfRange:
 		return "If-Range";
-    case HttpRequestField_IfUnmodifiedSince:
+	case HttpRequestField_IfUnmodifiedSince:
 		return "If-Unmodified-Since";
-    case HttpRequestField_MaxForwards:
+	case HttpRequestField_MaxForwards:
 		return "Max-Forwards";
-    case HttpRequestField_Origin:
+	case HttpRequestField_Origin:
 		return "Origin";
-    case HttpRequestField_Pragma:
+	case HttpRequestField_Pragma:
 		return "Pragma";
-    case HttpRequestField_ProxyAuthorization:
+	case HttpRequestField_ProxyAuthorization:
 		return "Proxy-Authorization";
-    case HttpRequestField_Range:
+	case HttpRequestField_Range:
 		return "Range";
-    case HttpRequestField_Referer:
+	case HttpRequestField_Referer:
 		return "Referer";
-    case HttpRequestField_TE:
+	case HttpRequestField_TE:
 		return "TE";
-    case HttpRequestField_Trailer:
+	case HttpRequestField_Trailer:
 		return "Trailer";
-    case HttpRequestField_TransferEncoding:
+	case HttpRequestField_TransferEncoding:
 		return "Transfer-Encoding";
-    case HttpRequestField_UserAgent:
+	case HttpRequestField_UserAgent:
 		return "User-Agent";
-    case HttpRequestField_Upgrade:
+	case HttpRequestField_Upgrade:
 		return "Upgrade";
-    case HttpRequestField_Via:
+	case HttpRequestField_Via:
 		return "Via";
-    case HttpRequestField_Warning:
+	case HttpRequestField_Warning:
 		return "Warning";
 	default:
 		return NULL;
 	}
 }
+
+static void HttpServerSetStatus(HttpServerHandle sv, int state)
+{
+	lockMutex(sv->mtx);
+	sv->status = state;
+	unlockMutex(sv->mtx);
+}
+
+//static char* getHttpRequestHeader(int sock)
+//{
+//	ssize_t size = 64, offset = 0;
+//	size_t chunkSize = 32;
+//	char *result = calloc((size_t)size, sizeof(char));
+//	char cr = 0, nl = 0, cr2 = 0, nl2 = 0;
+//
+//	while (!(cr && nl && cr2 && nl2))
+//	{	
+//		if (offset == size) {
+//			size *= 2;
+//			result = realloc(result, (size_t)size);
+//		}
+//		offset += read(sock, result + (size_t)offset, 1);
+//		char token = result[offset - 1];
+//
+//		if (token != '\r' && token != '\n') {
+//			cr = nl = cr2 = nl2 = 0;
+//		}
+//		else
+//		{
+//			if (token == '\r') {
+//				if (!cr)
+//					cr = 1;
+//				else
+//					cr2 = 1;
+//			}
+//			else if (token == '\n') {
+//				if (!nl)
+//					nl = 1;
+//				else
+//					nl2 = 1;
+//			}
+//		}
+//	}
+//
+//	result = realloc(result, (size_t)offset + 1); //space for null terminator
+//	result[offset] = 0; //set null terminator
+//
+//	return result;
+//}
+
+static int myWrite(Socket sock, const void *buffer, size_t size)
+{
+	int result = 0;
+
+	size_t bytesSent = 0;
+	while (bytesSent < size)
+	{
+		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
+		if (tempBytesSent > 0) {
+			bytesSent += tempBytesSent;
+		}
+		else {
+			result = errno;
+			break;
+		}
+	}
+
+	return result;
+}
+
+//resultado es memoria dinamica
+static char* getHttpRequestText(int sock)
+{
+	ssize_t size = 256, offset = 0, bytesRead;
+	size_t chunkSize = ((size_t)size) / 2;
+	char *result = malloc((size_t)size);
+
+	do
+	{
+		if (offset >= size) {
+			size *= 2;
+			result = realloc(result, (size_t)size);
+		}
+
+		bytesRead = recv(sock, result + (size_t)offset, chunkSize, MSG_DONTWAIT);
+
+		if (bytesRead > 0) {
+			offset += bytesRead;
+		}
+	} while (bytesRead > 0);
+
+	result = realloc(result, (size_t)offset + 1); //space for null terminator
+	result[offset] = 1; //set null terminator
+
+	return result;
+}
+
+//resultado es memoria dinamica
+static char* getResourceText(char *requestText)
+{
+	char *beg = strchr(requestText, '/'), *end = (beg ? beg + strcspn(beg, " ?") : NULL), *result = NULL;
+	if (beg && end)
+	{
+		result = malloc((size_t)(end - beg + 1));
+		memcpy(result, beg, (size_t)(end - beg));
+		result[end - beg] = 0; //null character
+	}
+	return result;
+}
+
+static struct HttpRequest makeRequest(const char *requestText) //Add error handling. this assumes thaat requestText points to a 100% valid HTTP request.
+{
+	struct HttpRequest result = {};
+	size_t i;
+
+	//Get method
+	const char *methodEnd = strchr(requestText, ' ');
+	result.method = malloc((size_t)(methodEnd - requestText + 1));
+	strncpy(result.method, requestText, (size_t)(methodEnd - requestText));
+	result.method[methodEnd - requestText] = 0;
+
+	//Get resource
+	const char *resourceBegin = methodEnd + 1, *resourceEnd = strchr(resourceBegin, ' ');
+	result.resource = malloc((size_t)(resourceEnd - resourceBegin + 1));
+	strncpy(result.resource, resourceBegin, (size_t)(resourceEnd - resourceBegin));
+	result.resource[resourceEnd - resourceBegin] = 0;
+
+	//Get version
+	const char *versionBegin = strchr(resourceEnd, ' ') + 1, *versionEnd = strstr(versionBegin, "\r\n");
+	result.version = malloc((size_t)(versionEnd - versionBegin + 1));
+	strncpy(result.version, versionBegin, (size_t)(versionEnd - versionBegin));
+	result.version[versionEnd - versionBegin] = 0;
+
+	//Get fields
+	for (i = HttpRequestField_AIM; i < HttpRequestField_Warning + 1; ++i)
+	{
+		const char *field = getHttpRequestFieldText((int)i);
+		char *fieldName = strstr(requestText, field);
+
+		if (fieldName)
+		{
+			size_t fieldNameSize = strlen(field) + 2 /*": "*/;
+			char *fieldValueBegin = fieldName + fieldNameSize, *fieldValueEnd = strstr(fieldValueBegin, "\r\n");
+			
+			if ((result.fields[i] = malloc((size_t)(fieldValueEnd - fieldValueBegin + 1)))) {
+				strncpy(result.fields[i], fieldValueBegin, (size_t)(fieldValueEnd - fieldValueBegin));
+				result.fields[i][fieldValueEnd - fieldValueBegin] = 0;
+			}
+		}
+	}
+
+	return result;
+}
+
+static void destroyRequest(HttpRequestHandle request)
+{
+	size_t i;
+	free(request->version);
+	free(request->resource);
+
+	for (i = HttpRequestField_AIM; i < HttpRequestField_Warning + 1; ++i)
+		free(request->fields[i]);
+
+	free(request->body);
+}
+
+static void *httpParser(void *arg)
+{
+	HttpRequestInfo *info = arg;
+	char *request = getHttpRequestText(info->sock);
+
+	if (request)
+	{
+		char *resource = getResourceText(request);
+
+		if (resource)
+		{
+			size_t i;
+			//char handled = 0;
+			size_t handlerIndex = -1u, bestMatchLength = 0;
+
+			for (i = 0; i < info->server->handlerVectorSize; ++i)
+			{
+				/*if (!strcmp(resource, info->server->handlerVector[i].resource)) {
+					struct HttpRequest req = { info->sock, request };
+					info->server->handlerVector[i].callback(&req);
+					handled = 1;
+				}*/
+				char *match = strstr(resource, info->server->handlerVector[i].context);
+				
+				if (match && match == resource) //si matcheo al principio del string
+				{ //Make a match function that doesn't make a literal compare. Instead, compare everything except slashes
+					size_t contextLength = strlen(info->server->handlerVector[i].context);
+
+					if (contextLength > bestMatchLength) {
+						handlerIndex = i;
+						bestMatchLength = contextLength;
+					}
+				}
+			}
+
+			if (handlerIndex != -1u)
+			{
+				struct HttpRequest req2 = makeRequest(request);
+				struct HttpRequest req = { info->sock, request };
+				info->server->handlerVector[handlerIndex].callback(&req);
+				destroyRequest(&req2);
+			}
+			else {
+				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
+				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
+			}
+
+			/*if (!handled) {
+				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
+				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
+			}*/
+			free(resource);
+		}
+		free(request);
+	}
+
+	close(info->sock);
+	free(info);
+	return NULL;
+}
+
+static void* serverProcedure(void *arg)
+{
+    HttpServerHandle svData = arg;
+    
+	if (!listen(svData->sock, svData->queueLength))
+	{
+		while (HttpServer_GetStatus(svData) == Running)
+		{
+			struct sockaddr data = {};
+			socklen_t sockLen = sizeof(struct sockaddr);
+			int clientSocket = accept(svData->sock, &data, &sockLen);
+
+			if (clientSocket != -1)
+			{
+				HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
+				info->sock = clientSocket;
+				info->server = svData;
+				createThread(httpParser, PTHREAD_CREATE_JOINABLE, info);
+			}
+		}
+	}
+	else {
+		HttpServerSetStatus(svData, Stopped);
+		svData->errorCode = ServerError_StartError;
+		return NULL;
+	}
+
+	HttpServerSetStatus(svData, Stopped);
+    return NULL;
+}
+
+static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 otherwise
+{
+	char result = 0;
+	Socket socketHandle = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (socketHandle != -1)
+	{
+		struct addrinfo *list = NULL, hint = {};
+
+		hint.ai_family = AF_INET;
+		hint.ai_socktype = SOCK_STREAM;
+		hint.ai_protocol = IPPROTO_TCP;
+
+		if (!getaddrinfo(NULL, "http", &hint, &list))
+		{
+			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
+				myWrite(socketHandle, "\r\n\r\n", 4);
+				result = 1;
+			}
+
+			freeaddrinfo(list);
+		}
+
+		close(socketHandle);
+	}
+	return result;
+}
+
+static void createServerErrorHandler(HttpServerHandle *sv)
+{
+    free(*sv);
+    *sv = NULL;
+    //printf("%s\n", strerror(errno));
+}
+
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //API---------------------------------------------------------------------------------------------------------------------------------------------------------------------
