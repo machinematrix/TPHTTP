@@ -49,10 +49,9 @@ struct HttpServer
 	int errorCode;
 };
 
-struct HttpRequest //make function to destroy this
+struct HttpRequest
 {
 	Socket sock;
-	//const char *requestText;
 	
 	char *method;
 	char *resource;
@@ -287,48 +286,6 @@ static void HttpServerSetStatus(HttpServerHandle sv, int state)
 	unlockMutex(sv->mtx);
 }
 
-//static char* getHttpRequestHeader(int sock)
-//{
-//	ssize_t size = 64, offset = 0;
-//	size_t chunkSize = 32;
-//	char *result = calloc((size_t)size, sizeof(char));
-//	char cr = 0, nl = 0, cr2 = 0, nl2 = 0;
-//
-//	while (!(cr && nl && cr2 && nl2))
-//	{	
-//		if (offset == size) {
-//			size *= 2;
-//			result = realloc(result, (size_t)size);
-//		}
-//		offset += read(sock, result + (size_t)offset, 1);
-//		char token = result[offset - 1];
-//
-//		if (token != '\r' && token != '\n') {
-//			cr = nl = cr2 = nl2 = 0;
-//		}
-//		else
-//		{
-//			if (token == '\r') {
-//				if (!cr)
-//					cr = 1;
-//				else
-//					cr2 = 1;
-//			}
-//			else if (token == '\n') {
-//				if (!nl)
-//					nl = 1;
-//				else
-//					nl2 = 1;
-//			}
-//		}
-//	}
-//
-//	result = realloc(result, (size_t)offset + 1); //space for null terminator
-//	result[offset] = 0; //set null terminator
-//
-//	return result;
-//}
-
 static int myWrite(Socket sock, const void *buffer, size_t size)
 {
 	int result = 0;
@@ -352,7 +309,7 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 //resultado es memoria dinamica
 static char* getHttpRequestText(int sock)
 {
-	ssize_t size = 256, offset = 0, bytesRead;
+	ssize_t size = 1024, offset = 0, bytesRead;
 	size_t chunkSize = ((size_t)size) / 2;
 	char *result = malloc((size_t)size);
 
@@ -370,28 +327,21 @@ static char* getHttpRequestText(int sock)
 		}
 	} while (bytesRead > 0);
 
-	result = realloc(result, (size_t)offset + 1); //space for null terminator
-	result[offset] = 0; //set null terminator
-
-	return result;
-}
-
-//resultado es memoria dinamica
-static char* getResourceText(char *requestText)
-{
-	char *beg = strchr(requestText, '/'), *end = (beg ? beg + strcspn(beg, " ?") : NULL), *result = NULL;
-	if (beg && end)
-	{
-		result = malloc((size_t)(end - beg + 1));
-		memcpy(result, beg, (size_t)(end - beg));
-		result[end - beg] = 0; //null character
+	if (offset) {
+		result = realloc(result, (size_t)offset + 1); //space for null terminator
+		result[offset] = 0; //set null terminator
 	}
+	else {
+		free(result);
+		result = NULL;
+	}
+
 	return result;
 }
 
-static struct HttpRequest makeRequest(const char *requestText) //Add error handling. this assumes thaat requestText points to a 100% valid HTTP request.
+static struct HttpRequest makeRequest(const char *requestText, HttpRequestInfo *info) //Add error handling. this assumes thaat requestText points to a 100% valid HTTP request.
 {
-	struct HttpRequest result = {};
+	struct HttpRequest result = { info->sock };
 	size_t i;
 
 	//Get method
@@ -432,9 +382,12 @@ static struct HttpRequest makeRequest(const char *requestText) //Add error handl
 
 	//Get body
 	const char *bodyBegin = strstr(versionEnd, "\r\n\r\n") + 4, *bodyEnd = bodyBegin + strlen(bodyBegin); //Esto asume que requestText termina con '\0'
-	result.bodySize = (size_t)(bodyEnd - bodyBegin);
-	result.body = malloc(result.bodySize);
-	strcpy(result.body, bodyBegin);
+	if (bodyEnd - bodyBegin)
+	{
+		result.bodySize = (size_t)(bodyEnd - bodyBegin);
+		result.body = malloc(result.bodySize);
+		strcpy(result.body, bodyBegin);
+	}
 
 	return result;
 }
@@ -458,53 +411,36 @@ static void *httpParser(void *arg)
 
 	if (request)
 	{
-		char *resource = getResourceText(request);
+		size_t handlerIndex = -1u, bestMatchLength = 0, i;
+		struct HttpRequest req = makeRequest(request, info);
+		free(request);
 
-		if (resource)
+		for (i = 0; i < info->server->handlerVectorSize; ++i)
 		{
-			size_t i;
-			//char handled = 0;
-			size_t handlerIndex = -1u, bestMatchLength = 0;
+			char *match = strstr(req.resource, info->server->handlerVector[i].context);
 
-			for (i = 0; i < info->server->handlerVectorSize; ++i)
-			{
-				/*if (!strcmp(resource, info->server->handlerVector[i].resource)) {
-					struct HttpRequest req = { info->sock, request };
-					info->server->handlerVector[i].callback(&req);
-					handled = 1;
-				}*/
-				char *match = strstr(resource, info->server->handlerVector[i].context);
-				
-				if (match && match == resource) //si matcheo al principio del string
-				{ //Make a match function that doesn't make a literal compare. Instead, compare everything except slashes
-					size_t contextLength = strlen(info->server->handlerVector[i].context);
+			if (match && match == req.resource) //si matcheo al principio del string
+			{ //Make a match function that doesn't make a literal compare. Instead, compare everything except slashes
+				size_t contextLength = strlen(info->server->handlerVector[i].context);
 
-					if (contextLength > bestMatchLength) {
-						handlerIndex = i;
-						bestMatchLength = contextLength;
-					}
+				if (contextLength > bestMatchLength) {
+					handlerIndex = i;
+					bestMatchLength = contextLength;
 				}
 			}
-
-			if (handlerIndex != -1u)
-			{
-				struct HttpRequest req = makeRequest(request);
-				//struct HttpRequest req = { info->sock, request };
-				info->server->handlerVector[handlerIndex].callback(&req);
-				destroyRequest(&req);
-			}
-			else {
-				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
-				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
-			}
-
-			/*if (!handled) {
-				const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
-				myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
-			}*/
-			free(resource);
 		}
-		free(request);
+
+		if (handlerIndex != -1u) {
+			info->server->handlerVector[handlerIndex].callback(&req);
+		}
+		else {
+			const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
+			myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
+		}
+		destroyRequest(&req);
+	}
+	else {
+		printf("Empty request (httpParser)\n");
 	}
 
 	close(info->sock);
@@ -559,7 +495,8 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 		if (!getaddrinfo(NULL, "http", &hint, &list))
 		{
 			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
-				myWrite(socketHandle, "\r\n\r\n", 4);
+				const char *dummyGet = "GET /INVALID HTTP/1.1\r\n\r\n";
+				myWrite(socketHandle, dummyGet, strlen(dummyGet));
 				result = 1;
 			}
 
@@ -755,9 +692,10 @@ int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCo
 {
 	int result = 1;
 	response->errorCode = ResponseError_Success;
+	size_t codeLength = (size_t)(integerDigitCount((size_t)statusCode) + 1);
 
 	if (statusCode <= 599) {
-		if ((response->statusCode = malloc((size_t)(integerDigitCount((size_t)statusCode) + 1)))) {
+		if ((response->statusCode = malloc(codeLength))) {
 			sprintf(response->statusCode, "%d", statusCode);
 		}
 		else {
