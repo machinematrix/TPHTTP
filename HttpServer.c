@@ -13,12 +13,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 
 #ifdef __linux__
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
 #define SOCKET_ERROR (-1)
@@ -312,20 +311,21 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 {
 	int result = 0;
 
-	size_t bytesSent = 0;
-	while (bytesSent < size)
+	int bytesSent = 0;
+	while (bytesSent < (int)size)
 	{
-		#ifdef __linux__
-		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
-		#else
-		size_t tempBytesSent = (size_t)send(sock, (char*)buffer + bytesSent, size - bytesSent, 0);
-		#endif
+		int tempBytesSent = send(sock, (char*)buffer + bytesSent, size - bytesSent, 0);
 
 		if (tempBytesSent > 0) {
 			bytesSent += tempBytesSent;
 		}
 		else {
+			#ifdef __linux__
 			result = errno;
+			#endif
+			#ifdef _WIN32
+			result = WSAGetLastError();
+			#endif
 			break;
 		}
 	}
@@ -339,6 +339,7 @@ static char* getHttpRequestText(Socket sock)
 	size_t capacity = 1024, offset = 0, chunkSize = capacity / 2;
 	char *result = malloc(capacity);
 	int flags, bytesRead;
+	
 	#ifdef _WIN32
 	flags = 0;
 	ioctlsocket(sock, FIONBIO, &(u_long) { 1 });
@@ -885,21 +886,6 @@ const char *HttpServer_GetResponseError(HttpResponseHandle response)
 	default:
 		return "";
 	}
-}
-
-void HttpServer_SendHtml(HttpRequestHandle request, const char *html)
-{
-	const char *responseTemplate1 = "HTTP/1.1 200 OK\r\nContent-Type:text/html\r\nContent-Length: ", *responseTemplate2 = "\r\nConnection: close\r\n\r\n";
-	char strNum[16], *response;
-	size_t htmlLen = strlen(html);
-
-	sprintf(strNum, "%d", htmlLen);
-	response = malloc(strlen(responseTemplate1) + strlen(strNum) + strlen(responseTemplate2) + htmlLen + 1);
-	sprintf(response, "%s%s%s%s", responseTemplate1, strNum, responseTemplate2, html);
-	
-	myWrite(request->sock, response, strlen(response));
-	
-	free(response);
 }
 
 const char *HttpServer_GetRequestMethod(HttpRequestHandle request)

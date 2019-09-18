@@ -142,7 +142,6 @@ extern "C" {
 	int HttpServer_SendResponse(HttpResponseHandle response);
 	const char *HttpServer_GetResponseError(HttpResponseHandle response);
 
-	void HttpServer_SendHtml(HttpRequestHandle request, const char *html);
 	const char *HttpServer_GetRequestMethod(HttpRequestHandle request);
 	const char *HttpServer_GetRequestUri(HttpRequestHandle request);
 	const char *HttpServer_GetRequestVersion(HttpRequestHandle request);
