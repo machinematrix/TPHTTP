@@ -31,7 +31,6 @@ typedef int Socket;
 #include <winsock2.h>
 #include <windows.h>
 #pragma comment(lib,"ws2_32.lib")
-typedef long long ssize_t;
 typedef SOCKET Socket;
 #define close closesocket
 #endif
@@ -55,7 +54,7 @@ struct HttpServer
 	int errorCode;
 };
 
-struct HttpRequest
+struct HttpRequest //Usada para pasarle el request a las callbacks de los endpoints
 {
 	Socket sock;
 	
@@ -67,7 +66,7 @@ struct HttpRequest
 	size_t bodySize;
 };
 
-struct HttpResponse
+struct HttpResponse //Usada para mandarle datos al cliente
 {
 	int errorCode;
 	Socket sock;
@@ -78,7 +77,7 @@ struct HttpResponse
 	size_t bodySize;
 };
 
-typedef struct
+typedef struct //Usada para pasarle informacion a httpParser
 {
 	Socket sock;
 	HttpServerHandle server;
