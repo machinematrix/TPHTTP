@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_DEPRECATE
+#endif
+
 #ifdef __linux__
 #define _GNU_SOURCE
 #endif
@@ -16,18 +21,20 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <errno.h>
-
+#define SOCKET_ERROR (-1)
+#define INVALID_SOCKET (-1)
 typedef int Socket;
 #endif
 
 #ifdef _WIN32
-//#include <Ws2tcpip.h>
+#define _CRT_SECURE_NO_WARNINGS
+#include <Ws2tcpip.h>
 #include <winsock2.h>
 #include <windows.h>
 #pragma comment(lib,"ws2_32.lib")
-#define ioctl ioctlsocket
-#define errno (WSAGetLastError())
+typedef long long ssize_t;
 typedef SOCKET Socket;
+#define close closesocket
 #endif
 
 typedef struct
@@ -86,6 +93,21 @@ static int integerDigitCount(size_t num)
 	{
 		++result;
 		num /= 10;
+	}
+
+	return result;
+}
+
+static char *reverseCharSearch(char *haystack, char sought)
+{
+	int i;
+	char *result = NULL;
+
+	for(i = (int)strlen(haystack) - 1; i > -1 && !result; --i)
+	{
+		if (haystack[i] == sought) {
+			result = haystack + i;
+		}
 	}
 
 	return result;
@@ -293,7 +315,12 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 	size_t bytesSent = 0;
 	while (bytesSent < size)
 	{
+		#ifdef __linux__
 		size_t tempBytesSent = (size_t)write(sock, buffer + bytesSent, size - bytesSent);
+		#else
+		size_t tempBytesSent = (size_t)send(sock, (char*)buffer + bytesSent, size - bytesSent, 0);
+		#endif
+
 		if (tempBytesSent > 0) {
 			bytesSent += tempBytesSent;
 		}
@@ -307,34 +334,54 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 }
 
 //resultado es memoria dinamica
-static char* getHttpRequestText(int sock)
+static char* getHttpRequestText(Socket sock)
 {
-	ssize_t size = 1024, offset = 0, bytesRead;
-	size_t chunkSize = ((size_t)size) / 2;
-	char *result = malloc((size_t)size);
+	size_t capacity = 1024, offset = 0, chunkSize = capacity / 2;
+	char *result = malloc(capacity);
+	int flags, bytesRead;
+	#ifdef _WIN32
+	flags = 0;
+	ioctlsocket(sock, FIONBIO, &(u_long) { 1 });
+	#endif
+	#ifdef __linux__
+	flags = MSG_DONTWAIT;
+	#endif
 
-	do
+	if (result)
 	{
-		if (offset >= size) {
-			size *= 2;
-			result = realloc(result, (size_t)size);
+		do
+		{
+			if (offset >= capacity) { //if the next read will not fit in the buffer, realloc...
+				capacity *= 2;
+				void *aux = realloc(result, capacity);
+				if (aux)
+					result = aux;
+			}
+
+			bytesRead = recv(sock, result + offset, chunkSize, flags);
+
+			if (bytesRead > 0) {
+				offset += bytesRead;
+			}
 		}
+		while (bytesRead > 0);
 
-		bytesRead = recv(sock, result + (size_t)offset, chunkSize, MSG_DONTWAIT);
-
-		if (bytesRead > 0) {
-			offset += bytesRead;
+		if (offset) {
+			void *aux = realloc(result, offset + 1); //space for null terminator
+			if (aux) {
+				result = aux;
+				result[offset] = 0; //set null terminator
+			}
 		}
-	} while (bytesRead > 0);
+		else {
+			free(result);
+			result = NULL;
+		}
+	}
 
-	if (offset) {
-		result = realloc(result, (size_t)offset + 1); //space for null terminator
-		result[offset] = 0; //set null terminator
-	}
-	else {
-		free(result);
-		result = NULL;
-	}
+	#ifdef _WIN32
+	ioctlsocket(sock, FIONBIO, &(u_long) { 0 });
+	#endif
 
 	return result;
 }
@@ -411,26 +458,28 @@ static void *httpParser(void *arg)
 
 	if (request)
 	{
-		size_t handlerIndex = -1u, bestMatchLength = 0, i;
+		int handlerIndex = -1;
+		size_t i, bestMatchLength = 0;
 		struct HttpRequest req = makeRequest(request, info);
 		free(request);
 
 		for (i = 0; i < info->server->handlerVectorSize; ++i)
 		{
-			char *match = strstr(req.resource, info->server->handlerVector[i].context);
+			char *lastSlash = reverseCharSearch(req.resource, '/'), *match = strstr(req.resource, info->server->handlerVector[i].context);
+			int matchedUntilLastSlash = !strncmp(info->server->handlerVector[i].context, req.resource, (size_t)(lastSlash - req.resource));
 
-			if (match && match == req.resource) //si matcheo al principio del string
-			{ //Make a match function that doesn't make a literal compare. Instead, compare everything except slashes
+			if (match && match == req.resource && matchedUntilLastSlash)
+			{
 				size_t contextLength = strlen(info->server->handlerVector[i].context);
 
 				if (contextLength > bestMatchLength) {
-					handlerIndex = i;
-					bestMatchLength = contextLength;
+					handlerIndex = (int)i;
+					bestMatchLength = (int)contextLength;
 				}
 			}
 		}
 
-		if (handlerIndex != -1u) {
+		if (handlerIndex != -1) {
 			info->server->handlerVector[handlerIndex].callback(&req);
 		}
 		else {
@@ -440,7 +489,7 @@ static void *httpParser(void *arg)
 		destroyRequest(&req);
 	}
 	else {
-		printf("Empty request (httpParser)\n");
+		;//printf("Empty request (httpParser)\n");
 	}
 
 	close(info->sock);
@@ -456,16 +505,21 @@ static void* serverProcedure(void *arg)
 	{
 		while (HttpServer_GetStatus(svData) == Running)
 		{
-			struct sockaddr data = {};
-			socklen_t sockLen = sizeof(struct sockaddr);
-			int clientSocket = accept(svData->sock, &data, &sockLen);
+			Socket clientSocket = accept(svData->sock, NULL, NULL);
 
-			if (clientSocket != -1)
+			if (clientSocket != SOCKET_ERROR)
 			{
 				HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
-				info->sock = clientSocket;
-				info->server = svData;
-				createThread(httpParser, PTHREAD_CREATE_JOINABLE, info);
+				if (info)
+				{
+					info->sock = clientSocket;
+					info->server = svData;
+
+					Thread th = createThread(httpParser, info);
+					if (th) {
+						destroyThread(th);
+					}
+				}
 			}
 		}
 	}
@@ -484,15 +538,16 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 	char result = 0;
 	Socket socketHandle = socket(AF_INET, SOCK_STREAM, 0);
 
-	if (socketHandle != -1)
+	if (socketHandle != INVALID_SOCKET)
 	{
-		struct addrinfo *list = NULL, hint = {};
+		struct addrinfo *list = NULL, hint = { 0 };
 
 		hint.ai_family = AF_INET;
 		hint.ai_socktype = SOCK_STREAM;
 		hint.ai_protocol = IPPROTO_TCP;
+		hint.ai_flags = AI_NUMERICSERV;
 
-		if (!getaddrinfo(NULL, "http", &hint, &list))
+		if (!getaddrinfo(NULL, "80", &hint, &list))
 		{
 			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
 				const char *dummyGet = "GET /INVALID HTTP/1.1\r\n\r\n";
@@ -510,9 +565,9 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 
 static void createServerErrorHandler(HttpServerHandle *sv)
 {
-    free(*sv);
-    *sv = NULL;
-    //printf("%s\n", strerror(errno));
+	free(*sv);
+	*sv = NULL;
+	//printf("%s\n", strerror(errno));
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -523,49 +578,61 @@ static void createServerErrorHandler(HttpServerHandle *sv)
 
 HttpServerHandle HttpServer_Create()
 {
-    HttpServerHandle sv = calloc(1, sizeof(struct HttpServer));
-    
-	sv->queueLength = 5;
-    sv->sock = socket(AF_INET, SOCK_STREAM, 0);
-	sv->status = Stopped;
+	#ifdef _WIN32
+	WSADATA wsaData = { 0 };
+	if (!WSAStartup(MAKEWORD(2, 2), &wsaData))
+	{
+		#endif
 
-    if(!createMutex(sv->mtx) && sv->sock != -1 && !setsockopt(sv->sock, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)))
-    {
-        int addrInfoResult = 0, bindResult = 0;
-        struct addrinfo *list = NULL, hint = {};
-        
-        hint.ai_flags = AI_NUMERICSERV | AI_PASSIVE;
-		hint.ai_family = AF_INET; //IPv4
-		hint.ai_socktype = SOCK_STREAM;
-		hint.ai_protocol = IPPROTO_TCP;
-		
-		if(!(addrInfoResult = getaddrinfo(NULL, "80", &hint, &list)))
+		HttpServerHandle sv = calloc(1, sizeof(struct HttpServer));
+
+		if (sv)
 		{
-		    if((bindResult = bind(sv->sock, list->ai_addr, sizeof(struct addrinfo))) != -1)
-		    {
-				//HttpServerSetStatus(sv, Stopped);
-		    }
-		    else {
-		        close(sv->sock);
-		        createServerErrorHandler(&sv);
-		    }
+			sv->queueLength = 5;
+			sv->sock = socket(AF_INET, SOCK_STREAM, 0);
+			sv->status = Stopped;
+			char optval[8] = { 1 };
+
+			if ((sv->mtx = createMutex())
+				&& sv->sock != INVALID_SOCKET
+				&& !setsockopt(sv->sock, SOL_SOCKET, SO_REUSEADDR, /*&(int){ 1 }*/optval, sizeof(optval)))
+			{
+				struct addrinfo *list = NULL, hint = { 0 };
+
+				hint.ai_flags = AI_NUMERICSERV | AI_PASSIVE;
+				hint.ai_family = AF_INET; //IPv4
+				hint.ai_socktype = SOCK_STREAM;
+				hint.ai_protocol = IPPROTO_TCP;
+
+				if (!getaddrinfo(NULL, "80", &hint, &list))
+				{
+					if (bind(sv->sock, list->ai_addr, list->ai_addrlen) == SOCKET_ERROR)
+					{
+						close(sv->sock);
+						createServerErrorHandler(&sv);
+					}
+					freeaddrinfo(list);
+				}
+				else {
+					createServerErrorHandler(&sv);
+				}
+			}
+			else {
+				createServerErrorHandler(&sv);
+			}
 		}
-		else {
-		    createServerErrorHandler(&sv);
-	    }
-    }
-    else {
-        createServerErrorHandler(&sv);
-    }
-    
-    return sv;
+		return sv;
+	#ifdef _WIN32
+	}
+	return NULL;
+	#endif
 }
 
 void HttpServer_Start(HttpServerHandle server)
 {
 	server->errorCode = ServerError_Success;
 	HttpServerSetStatus(server, Running);
-	server->serverThread = createThread(serverProcedure, PTHREAD_CREATE_JOINABLE, server); //creacion de thread puede fallar
+	server->serverThread = createThread(serverProcedure, server); //creacion de thread puede fallar
 	
 	if (!server->serverThread) {
 		HttpServerSetStatus(server, Stopped);
@@ -584,8 +651,9 @@ void HttpServer_Destroy(HttpServerHandle server)
 		}
 
 		joinThread(server->serverThread);
-		assert(!close(server->sock));
-		deleteMutex(server->mtx);
+		destroyThread(server->serverThread);
+		close(server->sock);
+		destroyMutex(server->mtx);
 
 		for (i = 0; i < server->handlerVectorSize; ++i) {
 			free(server->handlerVector[i].context);
@@ -593,6 +661,10 @@ void HttpServer_Destroy(HttpServerHandle server)
 		free(server->handlerVector);
 
 		free(server);
+
+		#ifdef _WIN32
+		WSACleanup();
+		#endif
 	}
 }
 
@@ -632,9 +704,9 @@ int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource
 
 int HttpServer_GetStatus(HttpServerHandle server)
 {
-	lockMutex(server->mtx);
+	//lockMutex(server->mtx);
 	int result = server->status;
-	unlockMutex(server->mtx);
+	//unlockMutex(server->mtx);
 	return result;
 }
 
@@ -732,15 +804,15 @@ int HttpServer_SetResponseField(HttpResponseHandle response, int field, const ch
 int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength)
 {
 	int result = 0;
-	void *bodyTemp = malloc(bodyLength);
+	void *bodyTemp = malloc((size_t)bodyLength);
 
 	response->errorCode = ResponseError_Success;
 	if (bodyTemp)
 	{
 		free(response->body);
 		response->body = bodyTemp;
-		response->bodySize = bodyLength;
-		memcpy(response->body, body, bodyLength);
+		response->bodySize = (size_t)bodyLength;
+		memcpy(response->body, body, (size_t)bodyLength);
 		result = 1;
 	}
 	else
@@ -838,14 +910,6 @@ const char *HttpServer_GetRequestMethod(HttpRequestHandle request)
 const char* HttpServer_GetRequestUri(HttpRequestHandle request)
 {
 	return request->resource;
-	//char *beg = strchr(request->requestText, '/'), *end = (beg ? beg + strcspn(beg, " ") : NULL), *result = NULL;
-	//if (beg && end)
-	//{
-	//	result = malloc((size_t)(end - beg + 1));
-	//	memcpy(result, beg, (size_t)(end - beg));
-	//	result[end - beg] = 0; //null character
-	//}
-	//return result;
 }
 
 const char* HttpServer_GetRequestVersion(HttpRequestHandle request)

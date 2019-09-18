@@ -1,16 +1,18 @@
 #ifndef __THREAD__
 #define __THREAD__
+#ifdef __linux__
 #include <pthread.h>
 #include <netdb.h>
+#endif
 
-typedef pthread_mutex_t Mutex;
-typedef pthread_t Thread;
+typedef struct MutexInfo *Mutex;
+typedef struct ThreadInfo *Thread;
 
-#define createMutex(mtx) pthread_mutex_init(&(mtx), NULL)
-#define deleteMutex(mtx) pthread_mutex_destroy(&(mtx))
-#define lockMutex(mtx) pthread_mutex_lock(&(mtx))
-#define unlockMutex(mtx) pthread_mutex_unlock(&(mtx))
-#define joinThread(/*pthread_t*/ threadId) pthread_join(threadId, 0)
-Thread createThread(void*(*fn)(void*), int detachState, void *arg);
-
+Mutex createMutex();
+void destroyMutex(Mutex mutex);
+void lockMutex(Mutex mutex);
+void unlockMutex(Mutex mutex);
+void joinThread(Thread thread);
+Thread createThread(void*(*fn)(void*), void *arg);
+void destroyThread(Thread thread);
 #endif
