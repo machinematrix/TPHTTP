@@ -634,16 +634,21 @@ HttpServerHandle HttpServer_Create(unsigned short port)
 	#endif
 }
 
-void HttpServer_Start(HttpServerHandle server)
+int HttpServer_Start(HttpServerHandle server)
 {
+	int result = 1;
+
 	server->errorCode = ServerError_Success;
 	HttpServerSetStatus(server, Running);
 	server->serverThread = createThread(serverProcedure, server); //creacion de thread puede fallar
 	
 	if (!server->serverThread) {
+		result = 0;
 		HttpServerSetStatus(server, Stopped);
 		server->errorCode = ServerError_ThreadCreationError;
 	}
+
+	return result;
 }
 
 void HttpServer_Destroy(HttpServerHandle server)
@@ -655,9 +660,11 @@ void HttpServer_Destroy(HttpServerHandle server)
 			HttpServerSetStatus(server, Stopped); //To break the loop
 			poke(server);
 		}
-
-		joinThread(server->serverThread);
-		destroyThread(server->serverThread);
+		
+		if (server->serverThread) { //si trato de destruir un server que no fue arrancado, el thread es nulo.
+			joinThread(server->serverThread);
+			destroyThread(server->serverThread);
+		}
 		close(server->sock);
 		destroyMutex(server->mtx);
 
@@ -846,7 +853,9 @@ int HttpServer_SendResponse(HttpResponseHandle response)
 			responseSize += strlen(getHttpResponseFieldText((int)i)) + strlen(response->fields[i]) + 2; //+2 is /r/n
 	}
 
-	if ((preparedResponse = malloc(responseSize)))
+	preparedResponse = malloc(responseSize + 1);
+
+	if (preparedResponse) //+1 porque la ultima llamada a sprintf escribe un null, que es 1 caracter mas de lo planeado si el response no tiene un body
 	{
 		offset += (size_t)sprintf(preparedResponse + offset, "%s%s %s\r\n", responseBegin, response->version, response->statusCode);
 

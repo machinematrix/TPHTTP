@@ -128,7 +128,7 @@ extern "C" {
 	typedef void(*HandlerCallback)(HttpRequestHandle);
 
 	HttpServerHandle HttpServer_Create(unsigned short port);
-	void HttpServer_Start(HttpServerHandle server);
+	int HttpServer_Start(HttpServerHandle server);
 	void HttpServer_Destroy(HttpServerHandle server);
 	int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback);
 	int HttpServer_GetStatus(HttpServerHandle server);
