@@ -23,6 +23,7 @@
 #define SOCKET_ERROR (-1)
 #define INVALID_SOCKET (-1)
 typedef int Socket;
+#define Sleep(miliseconds) usleep((miliseconds) * 1000)
 #endif
 
 #ifdef _WIN32
@@ -335,9 +336,8 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 //resultado es memoria dinamica
 static char* getHttpRequestText(Socket sock)
 {
-	size_t capacity = 1024, offset = 0, chunkSize = capacity / 2;
+	int capacity = 512, offset = 0, chunkSize = capacity / 2, flags, bytesRead, chances = 10;
 	char *result = malloc(capacity);
-	int flags, bytesRead;
 	
 	#ifdef _WIN32
 	flags = 0;
@@ -357,16 +357,21 @@ static char* getHttpRequestText(Socket sock)
 				if (aux)
 					result = aux;
 			}
-
+			
 			bytesRead = recv(sock, result + offset, chunkSize, flags);
 
-			if (bytesRead > 0) {
+			if (bytesRead != SOCKET_ERROR && bytesRead > 0) {
 				offset += bytesRead;
+				chances = 10; //resetear chances
+			}
+			else {
+				Sleep(25);
+				--chances;
 			}
 		}
-		while (bytesRead > 0);
+		while (chances);
 
-		if (offset) {
+		if (offset) { //si leimos al menos un byte
 			void *aux = realloc(result, offset + 1); //space for null terminator
 			if (aux) {
 				result = aux;
@@ -489,7 +494,7 @@ static void *httpParser(void *arg)
 		destroyRequest(&req);
 	}
 	else {
-		;//printf("Empty request (httpParser)\n");
+		;// printf("Empty request (httpParser)\n");
 	}
 
 	close(info->sock);
