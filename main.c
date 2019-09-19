@@ -77,7 +77,8 @@ void list(HttpRequestHandle req)
 	char **names, strBodySize[16];
 	const char *bodyBeg = "<a href=\"/", *bodyMid = "\">", *bodyEnd = "</a><br />";
 	char *body;
-	size_t count = 2, bodySize = 0, i, offset, bodyBegSize = strlen(bodyBeg), bodyMidSize = strlen(bodyMid), bodyEndSize = strlen(bodyEnd);
+	size_t count = 2, bodySize = 0, i, bodyBegSize = strlen(bodyBeg), bodyMidSize = strlen(bodyMid), bodyEndSize = strlen(bodyEnd);
+	int offset;
 
 	loadDirectoryFileNames(".", &names, &count);
 	
@@ -93,7 +94,7 @@ void list(HttpRequestHandle req)
 
 		for (i = 0, offset = 0; i < count; ++i) {
 			if (strcmp(names[i], "..") && strcmp(names[i], ".") && strcmp(names[i], programName))
-				offset += (size_t)sprintf(body + offset, "%s%s%s%s%s", bodyBeg, names[i], bodyMid, names[i], bodyEnd);
+				offset += sprintf(body + offset, "%s%s%s%s%s", bodyBeg, names[i], bodyMid, names[i], bodyEnd);
 		}
 		freeDirectoryFileNames(names, count);
 
@@ -149,7 +150,7 @@ void image(HttpRequestHandle req)
 int main(int argc, char **argv)
 {
 	programName = basename(argv[0]);
-    HttpServerHandle sv = HttpServer_Create();
+    HttpServerHandle sv = HttpServer_Create(80);
 
 	if (sv)
 	{

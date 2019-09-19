@@ -47,6 +47,7 @@ struct HttpServer
     Socket sock;
     int status;
     int queueLength;
+	char strPort[6];
     Mutex mtx;
     Thread serverThread;
 	HandlerSlot *handlerVector;
@@ -88,8 +89,7 @@ static int integerDigitCount(size_t num)
 {
 	int result = 0;
 
-	while (num > 0)
-	{
+	while (num > 0) {
 		++result;
 		num /= 10;
 	}
@@ -422,7 +422,7 @@ static struct HttpRequest makeRequest(const char *requestText, HttpRequestInfo *
 
 		if (fieldName)
 		{
-			size_t fieldNameSize = strlen(field) + 2 /*": "*/;
+			size_t fieldNameSize = strlen(field) + 2 /*": " <- no siempre es espacio*/; 
 			char *fieldValueBegin = fieldName + fieldNameSize, *fieldValueEnd = strstr(fieldValueBegin, "\r\n");
 			
 			if ((result.fields[i] = malloc((size_t)(fieldValueEnd - fieldValueBegin + 1)))) {
@@ -552,7 +552,7 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 		hint.ai_protocol = IPPROTO_TCP;
 		hint.ai_flags = AI_NUMERICSERV;
 
-		if (!getaddrinfo(NULL, "80", &hint, &list))
+		if (!getaddrinfo(NULL, data->strPort, &hint, &list))
 		{
 			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
 				const char *dummyGet = "GET /INVALID HTTP/1.1\r\n\r\n";
@@ -581,7 +581,7 @@ static void createServerErrorHandler(HttpServerHandle *sv)
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-HttpServerHandle HttpServer_Create()
+HttpServerHandle HttpServer_Create(unsigned short port)
 {
 	#ifdef _WIN32
 	WSADATA wsaData = { 0 };
@@ -604,12 +604,13 @@ HttpServerHandle HttpServer_Create()
 			{
 				struct addrinfo *list = NULL, hint = { 0 };
 
+				sprintf(sv->strPort, "%d", port);
 				hint.ai_flags = AI_NUMERICSERV | AI_PASSIVE;
 				hint.ai_family = AF_INET; //IPv4
 				hint.ai_socktype = SOCK_STREAM;
 				hint.ai_protocol = IPPROTO_TCP;
 
-				if (!getaddrinfo(NULL, "80", &hint, &list))
+				if (!getaddrinfo(NULL, sv->strPort, &hint, &list))
 				{
 					if (bind(sv->sock, list->ai_addr, list->ai_addrlen) == SOCKET_ERROR)
 					{
