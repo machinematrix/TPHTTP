@@ -24,6 +24,7 @@
 #define INVALID_SOCKET (-1)
 typedef int Socket;
 #define Sleep(miliseconds) usleep((miliseconds) * 1000)
+//#define USE_SELECT
 #endif
 
 #ifdef _WIN32
@@ -351,7 +352,7 @@ static char* getHttpRequestText(Socket sock)
 	{
 		do
 		{
-			if (offset >= capacity) { //if the next read will not fit in the buffer, realloc...
+			if (offset >= capacity) {
 				capacity *= 2;
 				void *aux = realloc(result, capacity);
 				if (aux)
@@ -508,10 +509,48 @@ static void* serverProcedure(void *arg)
     
 	if (!listen(svData->sock, svData->queueLength))
 	{
-		while (HttpServer_GetStatus(svData) == Running)
-		{
-			Socket clientSocket = accept(svData->sock, NULL, NULL);
+		#if defined(__linux__) && defined(USE_SELECT)
+		int i;
+		fd_set descriptors;
+		Socket maxFd = svData->sock;
+		FD_ZERO(&descriptors);
+		FD_SET(svData->sock, &descriptors);
+		#endif
 
+		while (HttpServer_GetStatus(svData) == ServerStatus_Running)
+		{
+			#if defined(__linux__) && defined(USE_SELECT)
+			if (select(maxFd + 1, &descriptors, NULL, NULL, NULL) != -1)
+			{
+				for (i = 0; i <= maxFd; ++i)
+				{
+					if (FD_ISSET(i, &descriptors))
+					{
+						if (i == svData->sock)
+						{
+							Socket newFd = accept(i, NULL, NULL);
+							if (newFd != SOCKET_ERROR)
+							{
+								if (newFd > maxFd)
+									maxFd = newFd;
+								FD_SET(newFd, &descriptors);
+							}
+						}
+						else
+						{
+							HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
+							if (info) {
+								info->sock = i;
+								info->server = svData;
+								httpParser(info);
+								FD_CLR(i, &descriptors);
+							}
+						}
+					}
+				}
+			}
+			#else
+			Socket clientSocket = accept(svData->sock, NULL, NULL);
 			if (clientSocket != SOCKET_ERROR)
 			{
 				HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
@@ -521,20 +560,20 @@ static void* serverProcedure(void *arg)
 					info->server = svData;
 
 					Thread th = createThread(httpParser, info);
-					if (th) {
+					if (th)
 						destroyThread(th);
-					}
 				}
 			}
+			#endif
 		}
 	}
 	else {
-		HttpServerSetStatus(svData, Stopped);
+		HttpServerSetStatus(svData, ServerStatus_Stopped);
 		svData->errorCode = ServerError_StartError;
 		return NULL;
 	}
 
-	HttpServerSetStatus(svData, Stopped);
+	HttpServerSetStatus(svData, ServerStatus_Stopped);
     return NULL;
 }
 
@@ -595,7 +634,7 @@ HttpServerHandle HttpServer_Create(unsigned short port)
 		{
 			sv->queueLength = 5;
 			sv->sock = socket(AF_INET, SOCK_STREAM, 0);
-			sv->status = Stopped;
+			sv->status = ServerStatus_Stopped;
 			char optval[8] = { 1 };
 
 			if ((sv->mtx = createMutex())
@@ -639,12 +678,12 @@ int HttpServer_Start(HttpServerHandle server)
 	int result = 1;
 
 	server->errorCode = ServerError_Success;
-	HttpServerSetStatus(server, Running);
+	HttpServerSetStatus(server, ServerStatus_Running);
 	server->serverThread = createThread(serverProcedure, server); //creacion de thread puede fallar
 	
 	if (!server->serverThread) {
 		result = 0;
-		HttpServerSetStatus(server, Stopped);
+		HttpServerSetStatus(server, ServerStatus_Stopped);
 		server->errorCode = ServerError_ThreadCreationError;
 	}
 
@@ -656,8 +695,8 @@ void HttpServer_Destroy(HttpServerHandle server)
 	if (server)
 	{
 		size_t i;
-		if (HttpServer_GetStatus(server) == Running) {
-			HttpServerSetStatus(server, Stopped); //To break the loop
+		if (HttpServer_GetStatus(server) == ServerStatus_Running) {
+			HttpServerSetStatus(server, ServerStatus_Stopped); //To break the loop
 			poke(server);
 		}
 		
@@ -686,7 +725,7 @@ int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource
 	int result = 1;
 
 	server->errorCode = ServerError_Success;
-	if (HttpServer_GetStatus(server) != Running)
+	if (HttpServer_GetStatus(server) != ServerStatus_Running)
 	{
 		size_t i;
 		for (i = 0; i < server->handlerVectorSize; ++i)
@@ -853,9 +892,9 @@ int HttpServer_SendResponse(HttpResponseHandle response)
 			responseSize += strlen(getHttpResponseFieldText((int)i)) + strlen(response->fields[i]) + 2; //+2 is /r/n
 	}
 
-	preparedResponse = malloc(responseSize + 1);
+	preparedResponse = malloc(responseSize + 1); //+1 porque la ultima llamada a sprintf escribe un null, que es 1 caracter mas de lo reservado si el response no tiene un body
 
-	if (preparedResponse) //+1 porque la ultima llamada a sprintf escribe un null, que es 1 caracter mas de lo planeado si el response no tiene un body
+	if (preparedResponse)
 	{
 		offset += (size_t)sprintf(preparedResponse + offset, "%s%s %s\r\n", responseBegin, response->version, response->statusCode);
 

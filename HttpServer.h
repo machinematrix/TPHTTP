@@ -7,8 +7,8 @@ extern "C" {
 
 	enum State
 	{
-		Running = 1,
-		Stopped
+		ServerStatus_Running = 1,
+		ServerStatus_Stopped
 	};
 
 	enum ServerError
