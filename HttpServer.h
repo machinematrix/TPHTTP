@@ -1,6 +1,6 @@
 #ifndef __HTTPSERVER__
 #define __HTTPSERVER__
-
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 	#endif
@@ -138,7 +138,7 @@ extern "C" {
 	void HttpServer_DestroyResponse(HttpResponseHandle response);
 	int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCode);
 	int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value);
-	int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength);
+	int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, size_t bodyLength);
 	int HttpServer_SendResponse(HttpResponseHandle response);
 	const char *HttpServer_GetResponseError(HttpResponseHandle response);
 

@@ -34,6 +34,7 @@ typedef int Socket;
 #include <windows.h>
 #pragma comment(lib,"ws2_32.lib")
 typedef SOCKET Socket;
+typedef SSIZE_T ssize_t;
 #define close closesocket
 #endif
 
@@ -86,9 +87,9 @@ typedef struct //Usada para pasarle informacion a httpParser
 	HttpServerHandle server;
 } HttpRequestInfo;
 
-static int integerDigitCount(size_t num)
+static size_t integerDigitCount(size_t num)
 {
-	int result = 0;
+	size_t result = 0;
 
 	while (num > 0) {
 		++result;
@@ -311,11 +312,11 @@ static void HttpServerSetStatus(HttpServerHandle sv, int state)
 static int myWrite(Socket sock, const void *buffer, size_t size)
 {
 	int result = 0;
+	size_t bytesSent = 0;
 
-	int bytesSent = 0;
-	while (bytesSent < (int)size)
+	while (bytesSent < size)
 	{
-		int tempBytesSent = send(sock, (char*)buffer + bytesSent, size - bytesSent, 0);
+		size_t tempBytesSent = (size_t)send(sock, (char*)buffer + bytesSent, size - bytesSent, 0);
 
 		if (tempBytesSent > 0) {
 			bytesSent += tempBytesSent;
@@ -337,7 +338,9 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 //resultado es memoria dinamica
 static char* getHttpRequestText(Socket sock)
 {
-	int capacity = 512, offset = 0, chunkSize = capacity / 2, flags, bytesRead, chances = 10;
+	int /*capacity = 512,*/ /*offset = 0,*/ /*chunkSize = capacity / 2,*/ flags, /*bytesRead,*/ chances = 10;
+	size_t capacity = 512, chunkSize = capacity / 2, offset = 0;
+	ssize_t bytesRead;
 	char *result = malloc(capacity);
 	
 	#ifdef _WIN32
@@ -362,7 +365,7 @@ static char* getHttpRequestText(Socket sock)
 			bytesRead = recv(sock, result + offset, chunkSize, flags);
 
 			if (bytesRead != SOCKET_ERROR && bytesRead > 0) {
-				offset += bytesRead;
+				offset += (size_t)bytesRead;
 				chances = 10; //resetear chances
 			}
 			else {
@@ -464,7 +467,7 @@ static void *httpParser(void *arg)
 
 	if (request)
 	{
-		int handlerIndex = -1;
+		size_t handlerIndex = ~0u;
 		size_t i, bestMatchLength = 0;
 		struct HttpRequest req = makeRequest(request, info);
 		free(request);
@@ -479,13 +482,13 @@ static void *httpParser(void *arg)
 				size_t contextLength = strlen(info->server->handlerVector[i].context);
 
 				if (contextLength > bestMatchLength) {
-					handlerIndex = (int)i;
-					bestMatchLength = (int)contextLength;
+					handlerIndex = i;
+					bestMatchLength = contextLength;
 				}
 			}
 		}
 
-		if (handlerIndex != -1) {
+		if (handlerIndex != ~0u) {
 			info->server->handlerVector[handlerIndex].callback(&req);
 		}
 		else {
@@ -816,7 +819,7 @@ int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCo
 {
 	int result = 1;
 	response->errorCode = ResponseError_Success;
-	size_t codeLength = (size_t)(integerDigitCount((size_t)statusCode) + 1);
+	size_t codeLength = integerDigitCount((size_t)statusCode) + 1;
 
 	if (statusCode <= 599) {
 		if ((response->statusCode = malloc(codeLength))) {
@@ -853,18 +856,18 @@ int HttpServer_SetResponseField(HttpResponseHandle response, int field, const ch
 	return result;
 }
 
-int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, unsigned long long bodyLength)
+int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, size_t bodyLength)
 {
 	int result = 0;
-	void *bodyTemp = malloc((size_t)bodyLength);
+	void *bodyTemp = malloc(bodyLength);
 
 	response->errorCode = ResponseError_Success;
 	if (bodyTemp)
 	{
 		free(response->body);
 		response->body = bodyTemp;
-		response->bodySize = (size_t)bodyLength;
-		memcpy(response->body, body, (size_t)bodyLength);
+		response->bodySize = bodyLength;
+		memcpy(response->body, body, bodyLength);
 		result = 1;
 	}
 	else
@@ -884,8 +887,9 @@ int HttpServer_SendResponse(HttpResponseHandle response)
 		return 0;
 	}
 
-	char *preparedResponse, responseBegin[] = "HTTP/"; //agregar principio del header en estructura
-	size_t i, offset = 0, responseSize = response->bodySize + strlen(responseBegin) + strlen(response->version) + 1 + strlen(response->statusCode) + 2 + 2; //+2 is 2 bytes needed for header end
+	char *preparedResponse, *responseBegin = "HTTP/"; //agregar principio del header en estructura
+	size_t i, responseSize = response->bodySize + strlen(responseBegin) + strlen(response->version) + 1 + strlen(response->statusCode) + 2 + 2; //+2 is 2 bytes needed for header end
+	int offset = 0;
 
 	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
 		if (response->fields[i])
@@ -896,13 +900,13 @@ int HttpServer_SendResponse(HttpResponseHandle response)
 
 	if (preparedResponse)
 	{
-		offset += (size_t)sprintf(preparedResponse + offset, "%s%s %s\r\n", responseBegin, response->version, response->statusCode);
+		offset += sprintf(preparedResponse + offset, "%s%s %s\r\n", responseBegin, response->version, response->statusCode);
 
 		for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
 			if (response->fields[i])
-				offset += (size_t)sprintf(preparedResponse + offset, "%s%s\r\n", getHttpResponseFieldText((int)i), response->fields[i]);
+				offset += sprintf(preparedResponse + offset, "%s%s\r\n", getHttpResponseFieldText((int)i), response->fields[i]);
 		}
-		offset += (size_t)sprintf(preparedResponse + offset, "\r\n"); //fin del header. escribo 2 bytes porque el bucle, o la primera linea, ya ponen /r/n al principio
+		offset += sprintf(preparedResponse + offset, "\r\n"); //fin del header. escribo 2 bytes porque el bucle, o la primera linea, ya ponen /r/n al principio
 
 		if (response->body)
 			memcpy(preparedResponse + offset, response->body, response->bodySize); //escribir body
