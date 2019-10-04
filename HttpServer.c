@@ -9,6 +9,7 @@
 
 #include "HttpServer.h"
 #include "Thread.h"
+#include "Vector.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -22,9 +23,8 @@
 #include <errno.h>
 #define SOCKET_ERROR (-1)
 #define INVALID_SOCKET (-1)
-typedef int Socket;
 #define Sleep(miliseconds) usleep((miliseconds) * 1000)
-//#define USE_SELECT
+typedef int Socket;
 #endif
 
 #ifdef _WIN32
@@ -38,10 +38,16 @@ typedef SSIZE_T ssize_t;
 #define close closesocket
 #endif
 
+enum MakeHttpRequestResults {
+	MakeHttpRequestResult_BadRequest,
+	MakeHttpRequestResult_AllocationFailed,
+	MakeHttpRequestResult_Success,
+};
+
 typedef struct
 {
 	char *context;
-	HandlerCallback callback;
+	HandlerCallback *callback;
 } HandlerSlot;
 
 struct HttpServer
@@ -52,9 +58,8 @@ struct HttpServer
 	char strPort[6];
     Mutex mtx;
     Thread serverThread;
-	HandlerSlot *handlerVector;
-	size_t handlerVectorSize;
-	size_t handlerVectorCapacity;
+	VectorHandle handlerVector;
+	LoggerCallback *logger;
 	int errorCode;
 };
 
@@ -215,7 +220,7 @@ static const char *getHttpResponseFieldText(int field)
 	}
 }
 
-static const char *getHttpRequestFieldText(int field)
+static const char *getHttpRequestFieldText(size_t field)
 {
 	switch (field)
 	{
@@ -316,7 +321,7 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 
 	while (bytesSent < size)
 	{
-		size_t tempBytesSent = (size_t)send(sock, (char*)buffer + bytesSent, size - bytesSent, 0);
+		ssize_t tempBytesSent = send(sock, (char*)buffer + bytesSent, (int)(size - bytesSent), 0);
 
 		if (tempBytesSent > 0) {
 			bytesSent += tempBytesSent;
@@ -335,10 +340,9 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 	return result;
 }
 
-//resultado es memoria dinamica
 static char* getHttpRequestText(Socket sock)
 {
-	int /*capacity = 512,*/ /*offset = 0,*/ /*chunkSize = capacity / 2,*/ flags, /*bytesRead,*/ chances = 10;
+	int flags, chances = 10;
 	size_t capacity = 512, chunkSize = capacity / 2, offset = 0;
 	ssize_t bytesRead;
 	char *result = malloc(capacity);
@@ -362,7 +366,7 @@ static char* getHttpRequestText(Socket sock)
 					result = aux;
 			}
 			
-			bytesRead = recv(sock, result + offset, chunkSize, flags);
+			bytesRead = recv(sock, result + offset, (int)chunkSize, flags);
 
 			if (bytesRead != SOCKET_ERROR && bytesRead > 0) {
 				offset += (size_t)bytesRead;
@@ -395,57 +399,107 @@ static char* getHttpRequestText(Socket sock)
 	return result;
 }
 
-static struct HttpRequest makeRequest(const char *requestText, HttpRequestInfo *info) //Add error handling. this assumes thaat requestText points to a 100% valid HTTP request.
+static int MakeHttpRequest(HttpRequestInfo *info, struct HttpRequest *result)
 {
-	struct HttpRequest result = { info->sock };
 	size_t i;
+	const char *methodEnd, *resourceBegin, *resourceEnd, *versionBegin, *versionEnd, *bodyBegin, *bodyEnd, *versionPrefix = "HTTP/";
+	char *requestText = getHttpRequestText(info->sock);
+	
+	if (!requestText)
+		return MakeHttpRequestResult_BadRequest;
 
-	//Get method
-	const char *methodEnd = strchr(requestText, ' ');
-	result.method = malloc((size_t)(methodEnd - requestText + 1));
-	strncpy(result.method, requestText, (size_t)(methodEnd - requestText));
-	result.method[methodEnd - requestText] = 0;
+	//Get delimiters
+	methodEnd = strchr(requestText, ' ');
+	if (!methodEnd)
+		return MakeHttpRequestResult_BadRequest;
+	resourceBegin = strchr(methodEnd, '/');
+	if (!resourceBegin)
+		return MakeHttpRequestResult_BadRequest;
+	resourceEnd = strchr(resourceBegin, ' ');
+	if (!resourceEnd)
+		return MakeHttpRequestResult_BadRequest;
+	versionBegin = strstr(resourceEnd, versionPrefix); //search for string "HTTP/"
+	if (!versionBegin)
+		return MakeHttpRequestResult_BadRequest;
+	versionBegin += strlen(versionPrefix);
+	versionEnd = strstr(versionBegin, "\r\n");
+	if (!versionEnd)
+		return MakeHttpRequestResult_BadRequest;
+	bodyBegin = strstr(versionEnd, "\r\n\r\n");
+	if (!bodyBegin)
+		return MakeHttpRequestResult_BadRequest;
+	bodyBegin += 4;
+	bodyEnd = bodyBegin + strlen(bodyBegin);
 
-	//Get resource
-	const char *resourceBegin = methodEnd + 1, *resourceEnd = strchr(resourceBegin, ' ');
-	result.resource = malloc((size_t)(resourceEnd - resourceBegin + 1));
-	strncpy(result.resource, resourceBegin, (size_t)(resourceEnd - resourceBegin));
-	result.resource[resourceEnd - resourceBegin] = 0;
+	memset(result, 0, sizeof(struct HttpRequest));
 
-	//Get version
-	const char *versionBegin = strchr(resourceEnd, ' ') + 1, *versionEnd = strstr(versionBegin, "\r\n");
-	result.version = malloc((size_t)(versionEnd - versionBegin + 1));
-	strncpy(result.version, versionBegin, (size_t)(versionEnd - versionBegin));
-	result.version[versionEnd - versionBegin] = 0;
+	result->method = malloc((size_t)(methodEnd - requestText + 1));
+	if (!result->method)
+		goto AllocationError;
+	strncpy(result->method, requestText, (size_t)(methodEnd - requestText));
+	result->method[methodEnd - requestText] = 0;
+
+	result->resource = malloc((size_t)(resourceEnd - resourceBegin + 1));
+	if (!result->resource)
+		goto AllocationError;
+	strncpy(result->resource, resourceBegin, (size_t)(resourceEnd - resourceBegin));
+	result->resource[resourceEnd - resourceBegin] = 0;
+
+	result->version = malloc((size_t)(versionEnd - versionBegin + 1));
+	if (!result->version)
+		goto AllocationError;
+	strncpy(result->version, versionBegin, (size_t)(versionEnd - versionBegin));
+	result->version[versionEnd - versionBegin] = 0;
 
 	//Get fields
 	for (i = HttpRequestField_AIM; i < HttpRequestField_Warning + 1; ++i)
 	{
-		const char *field = getHttpRequestFieldText((int)i);
+		const char *field = getHttpRequestFieldText(i);
 		char *fieldName = strstr(requestText, field);
 
 		if (fieldName)
 		{
-			size_t fieldNameSize = strlen(field) + 2 /*": " <- no siempre es espacio*/; 
+			size_t fieldNameSize = strlen(field) + 2;
+			if (fieldName[fieldNameSize - 1] != ' ') //Si no hay un espacio despues del :, decrementar
+				--fieldNameSize;
+
 			char *fieldValueBegin = fieldName + fieldNameSize, *fieldValueEnd = strstr(fieldValueBegin, "\r\n");
-			
-			if ((result.fields[i] = malloc((size_t)(fieldValueEnd - fieldValueBegin + 1)))) {
-				strncpy(result.fields[i], fieldValueBegin, (size_t)(fieldValueEnd - fieldValueBegin));
-				result.fields[i][fieldValueEnd - fieldValueBegin] = 0;
+			result->fields[i] = malloc((size_t)(fieldValueEnd - fieldValueBegin + 1));
+
+			if (result->fields[i]) {
+				strncpy(result->fields[i], fieldValueBegin, (size_t)(fieldValueEnd - fieldValueBegin));
+				result->fields[i][fieldValueEnd - fieldValueBegin] = 0;
 			}
+			else
+				goto AllocationError;
 		}
 	}
 
-	//Get body
-	const char *bodyBegin = strstr(versionEnd, "\r\n\r\n") + 4, *bodyEnd = bodyBegin + strlen(bodyBegin); //Esto asume que requestText termina con '\0'
 	if (bodyEnd - bodyBegin)
 	{
-		result.bodySize = (size_t)(bodyEnd - bodyBegin);
-		result.body = malloc(result.bodySize);
-		strcpy(result.body, bodyBegin);
+		result->bodySize = (size_t)(bodyEnd - bodyBegin);
+		result->body = malloc(result->bodySize);
+		if (result->body) {
+			strcpy(result->body, bodyBegin);
+		}
+		else
+			goto AllocationError;
 	}
 
-	return result;
+	free(requestText);
+	result->sock = info->sock;
+
+	return MakeHttpRequestResult_Success;
+
+AllocationError:
+	free(result->method);
+	free(result->resource);
+	free(result->version);
+	for (i = HttpRequestField_AIM; i < HttpRequestField_Warning + 1; ++i)
+		free(result->fields[i]);
+	free(result->body);
+	free(requestText);
+	return MakeHttpRequestResult_AllocationFailed;
 }
 
 static void destroyRequest(HttpRequestHandle request)
@@ -460,26 +514,32 @@ static void destroyRequest(HttpRequestHandle request)
 	free(request->body);
 }
 
-static void *httpParser(void *arg)
+static void TryLog(HttpServerHandle server, const char *msg)
+{
+	if (server->logger)
+		server->logger(msg);
+}
+
+static void *dispatcher(void *arg)
 {
 	HttpRequestInfo *info = arg;
-	char *request = getHttpRequestText(info->sock);
 
-	if (request)
+	size_t handlerIndex = ~0u;
+	size_t i, sz, bestMatchLength = 0;
+	struct HttpRequest req;
+	int makeRequestResult = MakeHttpRequest(info, &req);
+
+	if (makeRequestResult == MakeHttpRequestResult_Success)
 	{
-		size_t handlerIndex = ~0u;
-		size_t i, bestMatchLength = 0;
-		struct HttpRequest req = makeRequest(request, info);
-		free(request);
-
-		for (i = 0; i < info->server->handlerVectorSize; ++i)
+		for (i = 0, sz = Vector_Size(info->server->handlerVector); i < sz; ++i)
 		{
-			char *lastSlash = reverseCharSearch(req.resource, '/'), *match = strstr(req.resource, info->server->handlerVector[i].context);
-			int matchedUntilLastSlash = !strncmp(info->server->handlerVector[i].context, req.resource, (size_t)(lastSlash - req.resource));
+			HandlerSlot *slot = Vector_At(info->server->handlerVector, i);
+			char *lastSlash = reverseCharSearch(req.resource, '/'), *match = strstr(req.resource, slot->context);
+			int matchedUntilLastSlash = !strncmp(slot->context, req.resource, (size_t)(lastSlash - req.resource));
 
 			if (match && match == req.resource && matchedUntilLastSlash)
 			{
-				size_t contextLength = strlen(info->server->handlerVector[i].context);
+				size_t contextLength = strlen(slot->context);
 
 				if (contextLength > bestMatchLength) {
 					handlerIndex = i;
@@ -489,16 +549,26 @@ static void *httpParser(void *arg)
 		}
 
 		if (handlerIndex != ~0u) {
-			info->server->handlerVector[handlerIndex].callback(&req);
+			((HandlerSlot *)Vector_At(info->server->handlerVector, handlerIndex))->callback(&req);
+			TryLog(info->server, "Served request");
 		}
 		else {
-			const char *notFoundResponse = "HTTP/1.1 404 NOTFOUND\r\nConnection: close\r\n\r\n";
+			const char *notFoundResponse = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n";
 			myWrite(info->sock, notFoundResponse, strlen(notFoundResponse));
 		}
 		destroyRequest(&req);
 	}
-	else {
-		;// printf("Empty request (httpParser)\n");
+	else
+	{
+		if (makeRequestResult == MakeHttpRequestResult_BadRequest)
+		{
+			const char *badRequest = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+			myWrite(info->sock, badRequest, strlen(badRequest));
+			TryLog(info->server, "Bad request");
+		}
+		else if (makeRequestResult == MakeHttpRequestResult_AllocationFailed) {
+			TryLog(info->server, "Allocation failed while assembling request");
+		}
 	}
 
 	close(info->sock);
@@ -512,8 +582,8 @@ static void* serverProcedure(void *arg)
     
 	if (!listen(svData->sock, svData->queueLength))
 	{
-		#if defined(__linux__) && defined(USE_SELECT)
-		int i;
+		#if defined(USE_SELECT) && !defined(USE_POLL)
+		Socket i;
 		fd_set descriptors;
 		Socket maxFd = svData->sock;
 		FD_ZERO(&descriptors);
@@ -522,7 +592,7 @@ static void* serverProcedure(void *arg)
 
 		while (HttpServer_GetStatus(svData) == ServerStatus_Running)
 		{
-			#if defined(__linux__) && defined(USE_SELECT)
+			#if defined(USE_SELECT) && !defined(USE_POLL)
 			if (select(maxFd + 1, &descriptors, NULL, NULL, NULL) != -1)
 			{
 				for (i = 0; i <= maxFd; ++i)
@@ -545,7 +615,7 @@ static void* serverProcedure(void *arg)
 							if (info) {
 								info->sock = i;
 								info->server = svData;
-								httpParser(info);
+								dispatcher(info);
 								FD_CLR(i, &descriptors);
 							}
 						}
@@ -562,7 +632,7 @@ static void* serverProcedure(void *arg)
 					info->sock = clientSocket;
 					info->server = svData;
 
-					Thread th = createThread(httpParser, info);
+					Thread th = createThread(dispatcher, info);
 					if (th)
 						destroyThread(th);
 				}
@@ -597,9 +667,9 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 		if (!getaddrinfo(NULL, data->strPort, &hint, &list))
 		{
 			if (!connect(socketHandle, list->ai_addr, sizeof(struct addrinfo))) {
-				const char *dummyGet = "GET /INVALID HTTP/1.1\r\n\r\n";
-				myWrite(socketHandle, dummyGet, strlen(dummyGet));
-				result = 1;
+				const char *req = "lol";
+				if(!myWrite(socketHandle, req, strlen(req)))
+					result = 1;
 			}
 
 			freeaddrinfo(list);
@@ -614,7 +684,6 @@ static void createServerErrorHandler(HttpServerHandle *sv)
 {
 	free(*sv);
 	*sv = NULL;
-	//printf("%s\n", strerror(errno));
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -638,11 +707,14 @@ HttpServerHandle HttpServer_Create(unsigned short port)
 			sv->queueLength = 5;
 			sv->sock = socket(AF_INET, SOCK_STREAM, 0);
 			sv->status = ServerStatus_Stopped;
+			sv->mtx = createMutex();
+			sv->handlerVector = Vector_Create(sizeof(HandlerSlot));
 			char optval[8] = { 1 };
 
-			if ((sv->mtx = createMutex())
+			if (sv->mtx
+				&& sv->handlerVector
 				&& sv->sock != INVALID_SOCKET
-				&& !setsockopt(sv->sock, SOL_SOCKET, SO_REUSEADDR, /*&(int){ 1 }*/optval, sizeof(optval)))
+				&& !setsockopt(sv->sock, SOL_SOCKET, SO_REUSEADDR, optval, sizeof(optval)))
 			{
 				struct addrinfo *list = NULL, hint = { 0 };
 
@@ -654,7 +726,7 @@ HttpServerHandle HttpServer_Create(unsigned short port)
 
 				if (!getaddrinfo(NULL, sv->strPort, &hint, &list))
 				{
-					if (bind(sv->sock, list->ai_addr, list->ai_addrlen) == SOCKET_ERROR)
+					if (bind(sv->sock, list->ai_addr, (int)list->ai_addrlen) == SOCKET_ERROR)
 					{
 						close(sv->sock);
 						createServerErrorHandler(&sv);
@@ -682,7 +754,7 @@ int HttpServer_Start(HttpServerHandle server)
 
 	server->errorCode = ServerError_Success;
 	HttpServerSetStatus(server, ServerStatus_Running);
-	server->serverThread = createThread(serverProcedure, server); //creacion de thread puede fallar
+	server->serverThread = createThread(serverProcedure, server);
 	
 	if (!server->serverThread) {
 		result = 0;
@@ -697,7 +769,7 @@ void HttpServer_Destroy(HttpServerHandle server)
 {
 	if (server)
 	{
-		size_t i;
+		size_t i, sz;
 		if (HttpServer_GetStatus(server) == ServerStatus_Running) {
 			HttpServerSetStatus(server, ServerStatus_Stopped); //To break the loop
 			poke(server);
@@ -710,11 +782,12 @@ void HttpServer_Destroy(HttpServerHandle server)
 		close(server->sock);
 		destroyMutex(server->mtx);
 
-		for (i = 0; i < server->handlerVectorSize; ++i) {
-			free(server->handlerVector[i].context);
+		for (i = 0, sz = Vector_Size(server->handlerVector); i < sz; ++i) {
+			HandlerSlot *slot = Vector_At(server->handlerVector, i);
+			free(slot->context);
 		}
-		free(server->handlerVector);
 
+		Vector_Destroy(server->handlerVector);
 		free(server);
 
 		#ifdef _WIN32
@@ -723,31 +796,37 @@ void HttpServer_Destroy(HttpServerHandle server)
 	}
 }
 
-int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback)
+int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback *callback)
 {
 	int result = 1;
 
 	server->errorCode = ServerError_Success;
 	if (HttpServer_GetStatus(server) != ServerStatus_Running)
 	{
-		size_t i;
-		for (i = 0; i < server->handlerVectorSize; ++i)
+		size_t i, sz;
+		HandlerSlot slot = { 0 };
+
+		for (i = 0, sz = Vector_Size(server->handlerVector); i < sz; ++i)
 		{
-			if (!strcmp(resource, server->handlerVector[i].context)) { //Si ya hay un slot para ese resource, sobreescribir su callback con la nueva
-				server->handlerVector[i].callback = callback;
+			HandlerSlot *auxSlot = Vector_At(server->handlerVector, i);
+			if (!strcmp(resource, auxSlot->context)) { //Si ya hay un slot para ese resource, sobreescribir su callback con la nueva
+				auxSlot->callback = callback;
 				return result;
 			}
 		}
 
-		if (server->handlerVectorSize == server->handlerVectorCapacity) {
-			server->handlerVectorCapacity = (server->handlerVectorCapacity ? server->handlerVectorCapacity * 2 : 1);
-			server->handlerVector = realloc(server->handlerVector, server->handlerVectorCapacity * sizeof(HandlerSlot)); //add error handling
-		}
+		slot.callback = callback;
+		slot.context = calloc(1, strlen(resource) + 1);
 
-		HandlerSlot *slot = server->handlerVector + server->handlerVectorSize++;
-		slot->callback = callback;
-		slot->context = calloc(1, strlen(resource) + 1);
-		strcpy(slot->context, resource);
+		if(slot.context) {
+			strcpy(slot.context, resource);
+			Vector_PushBack(server->handlerVector, &slot);
+		}
+		else {
+			Vector_PopBack(server->handlerVector);
+			server->errorCode = ServerError_AllocationFailed;
+			result = 0;
+		}
 	}
 	else {
 		server->errorCode = ServerError_Running;
@@ -759,9 +838,9 @@ int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource
 
 int HttpServer_GetStatus(HttpServerHandle server)
 {
-	//lockMutex(server->mtx);
+	lockMutex(server->mtx);
 	int result = server->status;
-	//unlockMutex(server->mtx);
+	unlockMutex(server->mtx);
 	return result;
 }
 
@@ -776,10 +855,23 @@ const char *HttpServer_GetServerError(HttpServerHandle server)
 	case ServerError_StartError:
 		return "Could not start server";
 	case ServerError_Running:
-		return "Can't set handler while server is running";
+		return "Can't perform operation while server is running";
 	default:
 		return "";
 	}
+}
+
+int HttpServer_SetLoggerCallback(HttpServerHandle server, LoggerCallback *callback)
+{
+	int result = 1;
+	if (HttpServer_GetStatus(server) != ServerStatus_Running) {
+		server->logger = callback;
+	}
+	else {
+		server->errorCode = ServerError_Running;
+		result = 0;
+	}
+	return result;
 }
 
 HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request)
@@ -792,8 +884,11 @@ HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request)
 		size_t versionLength = strlen(version);
 		result->sock = request->sock;
 		result->version = malloc(versionLength + 1);
-		strcpy(result->version, version);
-		result->version[versionLength] = 0;
+		if (result->version)
+		{
+			strcpy(result->version, version);
+			result->version[versionLength] = 0;
+		}
 	}
 
 	return result;
@@ -887,43 +982,67 @@ int HttpServer_SendResponse(HttpResponseHandle response)
 		return 0;
 	}
 
-	char *preparedResponse, *responseBegin = "HTTP/"; //agregar principio del header en estructura
-	size_t i, responseSize = response->bodySize + strlen(responseBegin) + strlen(response->version) + 1 + strlen(response->statusCode) + 2 + 2; //+2 is 2 bytes needed for header end
-	int offset = 0;
+	static const char *responseBegin = "HTTP/", *fieldEnd = "\r\n";
+	size_t i;
 
-	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
-		if (response->fields[i])
-			responseSize += strlen(getHttpResponseFieldText((int)i)) + strlen(response->fields[i]) + 2; //+2 is /r/n
-	}
+	VectorHandle resp = Vector_Create(sizeof(char));
+	if (!resp)
+		goto AllocationError;
+	Vector_InsertRange(resp, Vector_Size(resp), responseBegin, responseBegin + strlen(responseBegin)); //header begin
+	if (Vector_AllocFailed(resp))
+		goto AllocationError;
+	Vector_InsertRange(resp, Vector_Size(resp), response->version, response->version + strlen(response->version)); //version
+	if (Vector_AllocFailed(resp))
+		goto AllocationError;
+	Vector_PushBack(resp, &(char){ ' ' }); //space
+	if (Vector_AllocFailed(resp))
+		goto AllocationError;
+	Vector_InsertRange(resp, Vector_Size(resp), response->statusCode, response->statusCode + strlen(response->statusCode));
+	if (Vector_AllocFailed(resp))
+		goto AllocationError;
+	Vector_InsertRange(resp, Vector_Size(resp), fieldEnd, fieldEnd + strlen(fieldEnd)); //new line
+	if (Vector_AllocFailed(resp))
+		goto AllocationError;
 
-	preparedResponse = malloc(responseSize + 1); //+1 porque la ultima llamada a sprintf escribe un null, que es 1 caracter mas de lo reservado si el response no tiene un body
-
-	if (preparedResponse)
+	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i)
 	{
-		offset += sprintf(preparedResponse + offset, "%s%s %s\r\n", responseBegin, response->version, response->statusCode);
-
-		for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i) {
-			if (response->fields[i])
-				offset += sprintf(preparedResponse + offset, "%s%s\r\n", getHttpResponseFieldText((int)i), response->fields[i]);
+		if (response->fields[i]) {
+			const char *fieldName = getHttpResponseFieldText((int)i);
+			Vector_InsertRange(resp, Vector_Size(resp), fieldName, fieldName + strlen(fieldName)); //field name
+			if (Vector_AllocFailed(resp))
+				goto AllocationError;
+			Vector_InsertRange(resp, Vector_Size(resp), response->fields[i], response->fields[i] + strlen(response->fields[i])); // field value
+			if (Vector_AllocFailed(resp))
+				goto AllocationError;
+			Vector_InsertRange(resp, Vector_Size(resp), fieldEnd, fieldEnd + strlen(fieldEnd)); // new line
+			if (Vector_AllocFailed(resp))
+				goto AllocationError;
 		}
-		offset += sprintf(preparedResponse + offset, "\r\n"); //fin del header. escribo 2 bytes porque el bucle, o la primera linea, ya ponen /r/n al principio
-
-		if (response->body)
-			memcpy(preparedResponse + offset, response->body, response->bodySize); //escribir body
-
-		if (myWrite(response->sock, preparedResponse, responseSize)) {
-			response->errorCode = ResponseError_WriteFailed;
-			free(preparedResponse);
-			return 0;
-		}
-
-		free(preparedResponse);
-		return 1;
 	}
-	else {
-		response->errorCode = ResponseError_AllocationFailed;
+	
+	Vector_InsertRange(resp, Vector_Size(resp), fieldEnd, fieldEnd + strlen(fieldEnd)); //header end
+	if (Vector_AllocFailed(resp))
+		goto AllocationError;
+
+	if (response->bodySize) {
+		Vector_InsertRange(resp, Vector_Size(resp), response->body, response->body + response->bodySize); //body
+		if (Vector_AllocFailed(resp))
+			goto AllocationError;
+	}
+
+	if (myWrite(response->sock, Vector_At(resp, 0), Vector_Size(resp) * sizeof(char))) {
+		response->errorCode = ResponseError_WriteFailed;
+		Vector_Destroy(resp);
 		return 0;
 	}
+
+	Vector_Destroy(resp);
+	return 1;
+
+AllocationError:
+	response->errorCode = ResponseError_AllocationFailed;
+	Vector_Destroy(resp);
+	return 0;
 }
 
 const char *HttpServer_GetResponseError(HttpResponseHandle response)

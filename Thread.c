@@ -40,7 +40,7 @@ struct ThreadArgs
 
 DWORD WINAPI ThreadProc(_In_ LPVOID lpParameter)
 {
-	struct ThreadArgs *args = (struct ThreadArgs *)lpParameter;
+	struct ThreadArgs *args = (struct ThreadArgs*)lpParameter;
 	args->fn(args->arg);
 	free(args);
 	return 1;

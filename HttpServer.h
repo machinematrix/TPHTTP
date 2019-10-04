@@ -125,14 +125,16 @@ extern "C" {
 	typedef struct HttpServer *HttpServerHandle;
 	typedef struct HttpRequest *HttpRequestHandle;
 	typedef struct HttpResponse *HttpResponseHandle;
-	typedef void(*HandlerCallback)(HttpRequestHandle);
+	typedef void(HandlerCallback)(HttpRequestHandle);
+	typedef void(LoggerCallback)(const char*);
 
 	HttpServerHandle HttpServer_Create(unsigned short port);
 	int HttpServer_Start(HttpServerHandle server);
 	void HttpServer_Destroy(HttpServerHandle server);
-	int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback callback);
+	int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback *callback);
 	int HttpServer_GetStatus(HttpServerHandle server);
 	const char *HttpServer_GetServerError(HttpServerHandle server);
+	int HttpServer_SetLoggerCallback(HttpServerHandle server, LoggerCallback *callback);
 
 	HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);
 	void HttpServer_DestroyResponse(HttpResponseHandle response);
