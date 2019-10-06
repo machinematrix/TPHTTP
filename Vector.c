@@ -4,10 +4,10 @@
 
 struct Vector
 {
+	size_t elemSize;
 	char *elements;
 	char *firstFree;
 	char *cap;
-	size_t elemSize;
 	char allocFailedFlag;
 };
 

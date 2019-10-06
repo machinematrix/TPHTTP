@@ -7,6 +7,11 @@
 
 const char *programName;
 
+void logger(const char *msg)
+{
+	printf("%s\n", msg);
+}
+
 void loadFile(FILE *file, void **outBuffer, long *outSize)
 {
 	fseek(file, 0, SEEK_END);
@@ -168,8 +173,9 @@ void image(HttpRequestHandle req)
 
 int main(int argc, char **argv)
 {
+	int error;
 	programName = basename(argv[0]);
-	HttpServerHandle server = HttpServer_Create(80);
+	HttpServerHandle server = HttpServer_Create(80, &error);
 
 	if (server)
 	{
@@ -201,6 +207,7 @@ int main(int argc, char **argv)
 		}
 		freeDirectoryFileNames(names, count);
 		HttpServer_SetEndpointCallback(server, "/list", list);
+		HttpServer_SetLoggerCallback(server, logger);
 
 		HttpServer_Start(server);
 
@@ -214,7 +221,7 @@ int main(int argc, char **argv)
 			}
 		}
 		else
-			printf("%s\n", HttpServer_GetServerError(server));
+			printf("%s\n", HttpServer_GetServerError(HttpServer_GetErrorCode(server)));
 
 		HttpServer_Destroy(server);
 	}

@@ -1,10 +1,25 @@
-#ifdef _WIN32
-#define _CRT_SECURE_NO_WARNINGS
-#define _CRT_SECURE_NO_DEPRECATE
-#endif
-
 #ifdef __linux__
-#define _GNU_SOURCE
+	#define _GNU_SOURCE
+	#include <sys/socket.h>
+	#include <sys/types.h>
+	#include <netdb.h>
+	#include <unistd.h>
+	#include <errno.h>
+	#define SOCKET_ERROR (-1)
+	#define INVALID_SOCKET (-1)
+	#define Sleep(miliseconds) usleep((miliseconds) * 1000)
+	typedef int Socket;
+	#define CloseSocket close
+#elif defined(_WIN32)
+	#define _CRT_SECURE_NO_DEPRECATE
+	#define _CRT_SECURE_NO_WARNINGS
+	#include <Ws2tcpip.h>
+	#include <winsock2.h>
+	#include <windows.h>
+	#pragma comment(lib,"ws2_32.lib")
+	typedef SOCKET Socket;
+	typedef SSIZE_T ssize_t;
+	#define CloseSocket closesocket
 #endif
 
 #include "HttpServer.h"
@@ -15,30 +30,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef __linux__
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <errno.h>
-#define SOCKET_ERROR (-1)
-#define INVALID_SOCKET (-1)
-#define Sleep(miliseconds) usleep((miliseconds) * 1000)
-typedef int Socket;
-#endif
-
-#ifdef _WIN32
-#define _CRT_SECURE_NO_WARNINGS
-#include <Ws2tcpip.h>
-#include <winsock2.h>
-#include <windows.h>
-#pragma comment(lib,"ws2_32.lib")
-typedef SOCKET Socket;
-typedef SSIZE_T ssize_t;
-#define close closesocket
-#endif
-
-enum MakeHttpRequestResults {
+enum MakeHttpRequestResults
+{
 	MakeHttpRequestResult_BadRequest,
 	MakeHttpRequestResult_AllocationFailed,
 	MakeHttpRequestResult_Success,
@@ -52,38 +45,37 @@ typedef struct
 
 struct HttpServer
 {
-    Socket sock;
     int status;
     int queueLength;
-	char strPort[6];
+	int errorCode;
+	Socket sock;
     Mutex mtx;
     Thread serverThread;
 	VectorHandle handlerVector;
 	LoggerCallback *logger;
-	int errorCode;
+	char strPort[6];
 };
 
 struct HttpRequest //Usada para pasarle el request a las callbacks de los endpoints
 {
-	Socket sock;
-	
 	char *method;
 	char *resource;
 	char *version;
 	char *fields[HttpRequestField_Warning + 1];
 	char *body;
 	size_t bodySize;
+	Socket sock;
 };
 
 struct HttpResponse //Usada para mandarle datos al cliente
 {
-	int errorCode;
-	Socket sock;
 	char *version;
 	char *statusCode;
 	char *fields[HttpResponseField_XFrameOptions + 1];
 	char *body;
 	size_t bodySize;
+	int errorCode;
+	Socket sock;
 };
 
 typedef struct //Usada para pasarle informacion a httpParser
@@ -104,7 +96,7 @@ static size_t integerDigitCount(size_t num)
 	return result;
 }
 
-static char *reverseCharSearch(char *haystack, char sought)
+static char* reverseCharSearch(char *haystack, char sought)
 {
 	int i;
 	char *result = NULL;
@@ -119,7 +111,7 @@ static char *reverseCharSearch(char *haystack, char sought)
 	return result;
 }
 
-static const char *getHttpResponseFieldText(int field)
+static const char* getHttpResponseFieldText(int field)
 {
 	switch (field)
 	{
@@ -220,7 +212,7 @@ static const char *getHttpResponseFieldText(int field)
 	}
 }
 
-static const char *getHttpRequestFieldText(size_t field)
+static const char* getHttpRequestFieldText(size_t field)
 {
 	switch (field)
 	{
@@ -317,20 +309,28 @@ static void HttpServerSetStatus(HttpServerHandle sv, int state)
 static int myWrite(Socket sock, const void *buffer, size_t size)
 {
 	int result = 0;
-	size_t bytesSent = 0;
+	#ifdef __linux__
+	size_t bytesSent = 0, localSize = size;
+	#elif defined(_WIN32)
+	int bytesSent = 0, localSize = (int)size;
+	#endif
+	
 
-	while (bytesSent < size)
+	while (bytesSent < localSize)
 	{
-		ssize_t tempBytesSent = send(sock, (char*)buffer + bytesSent, (int)(size - bytesSent), 0);
+		ssize_t tempBytesSent = send(sock, (char*)buffer + bytesSent, localSize - bytesSent, 0);
 
 		if (tempBytesSent > 0) {
-			bytesSent += tempBytesSent;
+			#ifdef __linux__
+			bytesSent += (size_t)tempBytesSent;
+			#elif defined(_WIN32)
+			bytesSent += (int)tempBytesSent;
+			#endif
 		}
 		else {
 			#ifdef __linux__
 			result = errno;
-			#endif
-			#ifdef _WIN32
+			#elif defined(_WIN32)
 			result = WSAGetLastError();
 			#endif
 			break;
@@ -342,17 +342,18 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 
 static char* getHttpRequestText(Socket sock)
 {
-	int flags, chances = 10;
-	size_t capacity = 512, chunkSize = capacity / 2, offset = 0;
+	int flags, chances = 5;
+	size_t capacity = 512, offset = 0;
 	ssize_t bytesRead;
 	char *result = malloc(capacity);
 	
 	#ifdef _WIN32
+	int chunkSize = (int)capacity / 2;
 	flags = 0;
 	ioctlsocket(sock, FIONBIO, &(u_long) { 1 });
-	#endif
-	#ifdef __linux__
+	#elif defined(__linux__)
 	flags = MSG_DONTWAIT;
+	size_t chunkSize = capacity / 2;
 	#endif
 
 	if (result)
@@ -366,11 +367,11 @@ static char* getHttpRequestText(Socket sock)
 					result = aux;
 			}
 			
-			bytesRead = recv(sock, result + offset, (int)chunkSize, flags);
+			bytesRead = recv(sock, result + offset, chunkSize, flags);
 
 			if (bytesRead != SOCKET_ERROR && bytesRead > 0) {
 				offset += (size_t)bytesRead;
-				chances = 10; //resetear chances
+				chances = 5; //resetear chances
 			}
 			else {
 				Sleep(25);
@@ -429,7 +430,7 @@ static int MakeHttpRequest(HttpRequestInfo *info, struct HttpRequest *result)
 	if (!bodyBegin)
 		return MakeHttpRequestResult_BadRequest;
 	bodyBegin += 4;
-	bodyEnd = bodyBegin + strlen(bodyBegin);
+	bodyEnd = bodyBegin + strlen(bodyBegin); //body could contain '\0'?
 
 	memset(result, 0, sizeof(struct HttpRequest));
 
@@ -520,7 +521,7 @@ static void TryLog(HttpServerHandle server, const char *msg)
 		server->logger(msg);
 }
 
-static void *dispatcher(void *arg)
+static void* dispatcher(void *arg)
 {
 	HttpRequestInfo *info = arg;
 
@@ -571,7 +572,7 @@ static void *dispatcher(void *arg)
 		}
 	}
 
-	close(info->sock);
+	CloseSocket(info->sock);
 	free(info);
 	return NULL;
 }
@@ -582,7 +583,7 @@ static void* serverProcedure(void *arg)
     
 	if (!listen(svData->sock, svData->queueLength))
 	{
-		#if defined(USE_SELECT) && !defined(USE_POLL)
+		#ifdef USE_SELECT
 		Socket i;
 		fd_set descriptors;
 		Socket maxFd = svData->sock;
@@ -592,8 +593,8 @@ static void* serverProcedure(void *arg)
 
 		while (HttpServer_GetStatus(svData) == ServerStatus_Running)
 		{
-			#if defined(USE_SELECT) && !defined(USE_POLL)
-			if (select(maxFd + 1, &descriptors, NULL, NULL, NULL) != -1)
+			#ifdef USE_SELECT
+			if (select((int)maxFd + 1, &descriptors, NULL, NULL, NULL) != -1)
 			{
 				for (i = 0; i <= maxFd; ++i)
 				{
@@ -675,7 +676,7 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 			freeaddrinfo(list);
 		}
 
-		close(socketHandle);
+		CloseSocket(socketHandle);
 	}
 	return result;
 }
@@ -684,6 +685,7 @@ static void createServerErrorHandler(HttpServerHandle *sv)
 {
 	free(*sv);
 	*sv = NULL;
+	//printf("%s\n", strerror(errno));
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -692,8 +694,9 @@ static void createServerErrorHandler(HttpServerHandle *sv)
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-HttpServerHandle HttpServer_Create(unsigned short port)
+HttpServerHandle HttpServer_Create(unsigned short port, int *errorCode)
 {
+	*errorCode = ServerError_Success;
 	#ifdef _WIN32
 	WSADATA wsaData = { 0 };
 	if (!WSAStartup(MAKEWORD(2, 2), &wsaData))
@@ -709,7 +712,7 @@ HttpServerHandle HttpServer_Create(unsigned short port)
 			sv->status = ServerStatus_Stopped;
 			sv->mtx = createMutex();
 			sv->handlerVector = Vector_Create(sizeof(HandlerSlot));
-			char optval[8] = { 1 };
+			char optval[8] = { 0 };
 
 			if (sv->mtx
 				&& sv->handlerVector
@@ -726,24 +729,37 @@ HttpServerHandle HttpServer_Create(unsigned short port)
 
 				if (!getaddrinfo(NULL, sv->strPort, &hint, &list))
 				{
-					if (bind(sv->sock, list->ai_addr, (int)list->ai_addrlen) == SOCKET_ERROR)
+					#ifdef __linux__
+					socklen_t len = list->ai_addrlen;
+					#elif defined(_WIN32)
+					int len = (int)list->ai_addrlen;
+					#endif
+
+					if (bind(sv->sock, list->ai_addr, len) == SOCKET_ERROR)
 					{
-						close(sv->sock);
+						CloseSocket(sv->sock);
+						*errorCode = ServerError_Initialization;
 						createServerErrorHandler(&sv);
 					}
 					freeaddrinfo(list);
 				}
 				else {
+					*errorCode = ServerError_Initialization;
 					createServerErrorHandler(&sv);
 				}
 			}
 			else {
+				*errorCode = ServerError_Initialization;
 				createServerErrorHandler(&sv);
 			}
 		}
+		else {
+			*errorCode = ServerError_AllocationFailed;
+		}
 		return sv;
-	#ifdef _WIN32
+		#ifdef _WIN32
 	}
+	else *errorCode = ServerError_WSAStartupError;
 	return NULL;
 	#endif
 }
@@ -779,7 +795,7 @@ void HttpServer_Destroy(HttpServerHandle server)
 			joinThread(server->serverThread);
 			destroyThread(server->serverThread);
 		}
-		close(server->sock);
+		CloseSocket(server->sock);
 		destroyMutex(server->mtx);
 
 		for (i = 0, sz = Vector_Size(server->handlerVector); i < sz; ++i) {
@@ -838,15 +854,18 @@ int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource
 
 int HttpServer_GetStatus(HttpServerHandle server)
 {
+	int result;
+
 	lockMutex(server->mtx);
-	int result = server->status;
+	result = server->status;
 	unlockMutex(server->mtx);
+
 	return result;
 }
 
-const char *HttpServer_GetServerError(HttpServerHandle server)
+const char* HttpServer_GetServerError(int errorCode)
 {
-	switch (server->errorCode)
+	switch (errorCode)
 	{
 	case ServerError_Success:
 		return "Success";
@@ -856,9 +875,18 @@ const char *HttpServer_GetServerError(HttpServerHandle server)
 		return "Could not start server";
 	case ServerError_Running:
 		return "Can't perform operation while server is running";
+	case ServerError_WSAStartupError:
+		return "Could not initialize Winsock DLL";
+	case ServerError_Initialization:
+		return "Failed to initialize server object";
 	default:
 		return "";
 	}
+}
+
+int HttpServer_GetErrorCode(HttpServerHandle server)
+{
+	return server->errorCode;
 }
 
 int HttpServer_SetLoggerCallback(HttpServerHandle server, LoggerCallback *callback)
@@ -888,6 +916,10 @@ HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request)
 		{
 			strcpy(result->version, version);
 			result->version[versionLength] = 0;
+		}
+		else {
+			free(result);
+			result = NULL;
 		}
 	}
 
@@ -1045,7 +1077,7 @@ AllocationError:
 	return 0;
 }
 
-const char *HttpServer_GetResponseError(HttpResponseHandle response)
+const char* HttpServer_GetResponseError(HttpResponseHandle response)
 {
 	switch (response->errorCode)
 	{
@@ -1064,7 +1096,7 @@ const char *HttpServer_GetResponseError(HttpResponseHandle response)
 	}
 }
 
-const char *HttpServer_GetRequestMethod(HttpRequestHandle request)
+const char* HttpServer_GetRequestMethod(HttpRequestHandle request)
 {
 	return request->method;
 }

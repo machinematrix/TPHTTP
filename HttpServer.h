@@ -1,11 +1,12 @@
 #ifndef __HTTPSERVER__
 #define __HTTPSERVER__
 #include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
-	#endif
+#endif
 
-	enum State
+	enum ServerStatus
 	{
 		ServerStatus_Running = 1,
 		ServerStatus_Stopped
@@ -18,6 +19,8 @@ extern "C" {
 		ServerError_StartError,
 		ServerError_Running,
 		ServerError_AllocationFailed,
+		ServerError_WSAStartupError, //Windows only
+		ServerError_Initialization
 	};
 
 	enum ResponseError
@@ -128,12 +131,13 @@ extern "C" {
 	typedef void(HandlerCallback)(HttpRequestHandle);
 	typedef void(LoggerCallback)(const char*);
 
-	HttpServerHandle HttpServer_Create(unsigned short port);
+	HttpServerHandle HttpServer_Create(unsigned short port, int *errorCode);
 	int HttpServer_Start(HttpServerHandle server);
 	void HttpServer_Destroy(HttpServerHandle server);
 	int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback *callback);
 	int HttpServer_GetStatus(HttpServerHandle server);
-	const char *HttpServer_GetServerError(HttpServerHandle server);
+	const char* HttpServer_GetServerError(int errorCode);
+	int HttpServer_GetErrorCode(HttpServerHandle server);
 	int HttpServer_SetLoggerCallback(HttpServerHandle server, LoggerCallback *callback);
 
 	HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);
@@ -142,16 +146,16 @@ extern "C" {
 	int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value);
 	int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, size_t bodyLength);
 	int HttpServer_SendResponse(HttpResponseHandle response);
-	const char *HttpServer_GetResponseError(HttpResponseHandle response);
+	const char* HttpServer_GetResponseError(HttpResponseHandle response);
 
-	const char *HttpServer_GetRequestMethod(HttpRequestHandle request);
-	const char *HttpServer_GetRequestUri(HttpRequestHandle request);
-	const char *HttpServer_GetRequestVersion(HttpRequestHandle request);
-	const char *HttpServer_GetRequestField(HttpRequestHandle request, int field);
-	const void *HttpServer_GetRequestBody(HttpRequestHandle request);
+	const char* HttpServer_GetRequestMethod(HttpRequestHandle request);
+	const char* HttpServer_GetRequestUri(HttpRequestHandle request);
+	const char* HttpServer_GetRequestVersion(HttpRequestHandle request);
+	const char* HttpServer_GetRequestField(HttpRequestHandle request, int field);
+	const void* HttpServer_GetRequestBody(HttpRequestHandle request);
 	unsigned long long HttpServer_GetRequestBodySize(HttpRequestHandle request);
 
-	#ifdef __cplusplus
+#ifdef __cplusplus
 }
 #endif
 
