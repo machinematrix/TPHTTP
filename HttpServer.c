@@ -30,12 +30,21 @@
 #include <stdio.h>
 #include <string.h>
 
-enum MakeHttpRequestResults
+enum MakeHttpRequestResult
 {
 	MakeHttpRequestResult_BadRequest,
 	MakeHttpRequestResult_AllocationFailed,
+	MakeHttpRequestResult_EmptyRequest,
 	MakeHttpRequestResult_Success,
 };
+
+enum GetHttpRequestTextResult
+{
+	GetHttpRequestTextResult_AllocationFailed,
+	GetHttpRequestTextResult_Success,
+	GetHttpRequestTextResult_EmptyRequest
+};
+
 
 typedef struct
 {
@@ -84,9 +93,33 @@ typedef struct //Usada para pasarle informacion a httpParser
 	HttpServerHandle server;
 } HttpRequestInfo;
 
-static size_t integerDigitCount(size_t num)
+//used for allocating memory with a signed type without getting warnings
+static void* allocate(ssize_t size)
 {
-	size_t result = 0;
+	void *result = NULL;
+
+	if (size > 0) {
+		result = malloc((size_t)size);
+	}
+
+	return result;
+}
+
+//used for allocating memory with a signed type without getting warnings
+static void* reallocate(void *ptr, ssize_t size)
+{
+	void *result = NULL;
+
+	if (size > 0) {
+		result = realloc(ptr, (size_t)size);
+	}
+
+	return result;
+}
+
+static int integerDigitCount(size_t num)
+{
+	int result = 0;
 
 	while (num > 0) {
 		++result;
@@ -98,13 +131,16 @@ static size_t integerDigitCount(size_t num)
 
 static char* reverseCharSearch(char *haystack, char sought)
 {
-	int i;
+	size_t i = strlen(haystack);
 	char *result = NULL;
 
-	for(i = (int)strlen(haystack) - 1; i > -1 && !result; --i)
+	if (i)
 	{
-		if (haystack[i] == sought) {
-			result = haystack + i;
+		for (--i; i && !result; --i)
+		{
+			if (haystack[i] == sought) {
+				result = haystack + i;
+			}
 		}
 	}
 
@@ -309,23 +345,18 @@ static void HttpServerSetStatus(HttpServerHandle sv, int state)
 static int myWrite(Socket sock, const void *buffer, size_t size)
 {
 	int result = 0;
-	#ifdef __linux__
-	size_t bytesSent = 0, localSize = size;
-	#elif defined(_WIN32)
-	int bytesSent = 0, localSize = (int)size;
-	#endif
-	
+	ssize_t bytesSent = 0;
 
-	while (bytesSent < localSize)
+	while (bytesSent < (ssize_t)size)
 	{
-		ssize_t tempBytesSent = send(sock, (char*)buffer + bytesSent, localSize - bytesSent, 0);
+		#ifdef __linux__
+		ssize_t tempBytesSent = send(sock, (char*)buffer + bytesSent, (size_t)((ssize_t)size - bytesSent), 0);
+		#elif defined(_WIN32)
+		ssize_t tempBytesSent = send(sock, (char*)buffer + bytesSent, (int)(size - bytesSent), 0);
+		#endif
 
 		if (tempBytesSent > 0) {
-			#ifdef __linux__
-			bytesSent += (size_t)tempBytesSent;
-			#elif defined(_WIN32)
-			bytesSent += (int)tempBytesSent;
-			#endif
+			bytesSent += tempBytesSent;
 		}
 		else {
 			#ifdef __linux__
@@ -340,20 +371,14 @@ static int myWrite(Socket sock, const void *buffer, size_t size)
 	return result;
 }
 
-static char* getHttpRequestText(Socket sock)
+static char* getHttpRequestText(Socket sock, int *errorCode)
 {
-	int flags, chances = 5;
-	size_t capacity = 512, offset = 0;
-	ssize_t bytesRead;
-	char *result = malloc(capacity);
+	ssize_t bytesRead, capacity = 512, offset = 0, chunkSize = capacity / 2, chances = 5;
+	char *result = allocate(capacity);
 	
+	*errorCode = GetHttpRequestTextResult_Success;
 	#ifdef _WIN32
-	int chunkSize = (int)capacity / 2;
-	flags = 0;
 	ioctlsocket(sock, FIONBIO, &(u_long) { 1 });
-	#elif defined(__linux__)
-	flags = MSG_DONTWAIT;
-	size_t chunkSize = capacity / 2;
 	#endif
 
 	if (result)
@@ -362,15 +387,27 @@ static char* getHttpRequestText(Socket sock)
 		{
 			if (offset >= capacity) {
 				capacity *= 2;
-				void *aux = realloc(result, capacity);
+				void *aux = reallocate(result, capacity);
 				if (aux)
 					result = aux;
+				else
+				{
+					#ifdef _WIN32
+					ioctlsocket(sock, FIONBIO, &(u_long) { 0 });
+					#endif
+					free(result);
+					*errorCode = GetHttpRequestTextResult_AllocationFailed;
+				}
 			}
 			
-			bytesRead = recv(sock, result + offset, chunkSize, flags);
+			#ifdef __linux__
+			bytesRead = recv(sock, result + offset, (size_t)chunkSize, MSG_DONTWAIT);
+			#elif defined(_WIN32)
+			bytesRead = recv(sock, result + offset, (int)chunkSize, 0);
+			#endif
 
 			if (bytesRead != SOCKET_ERROR && bytesRead > 0) {
-				offset += (size_t)bytesRead;
+				offset += bytesRead;
 				chances = 5; //resetear chances
 			}
 			else {
@@ -381,16 +418,23 @@ static char* getHttpRequestText(Socket sock)
 		while (chances);
 
 		if (offset) { //si leimos al menos un byte
-			void *aux = realloc(result, offset + 1); //space for null terminator
+			void *aux = reallocate(result, offset + 1); //space for null terminator
 			if (aux) {
 				result = aux;
 				result[offset] = 0; //set null terminator
+			}
+			else {
+				*errorCode = GetHttpRequestTextResult_AllocationFailed;
 			}
 		}
 		else {
 			free(result);
 			result = NULL;
+			*errorCode = GetHttpRequestTextResult_EmptyRequest;
 		}
+	}
+	else {
+		*errorCode = GetHttpRequestTextResult_AllocationFailed;
 	}
 
 	#ifdef _WIN32
@@ -403,11 +447,20 @@ static char* getHttpRequestText(Socket sock)
 static int MakeHttpRequest(HttpRequestInfo *info, struct HttpRequest *result)
 {
 	size_t i;
+	int requestTextError;
 	const char *methodEnd, *resourceBegin, *resourceEnd, *versionBegin, *versionEnd, *bodyBegin, *bodyEnd, *versionPrefix = "HTTP/";
-	char *requestText = getHttpRequestText(info->sock);
+	char *requestText = getHttpRequestText(info->sock, &requestTextError);
 	
-	if (!requestText)
-		return MakeHttpRequestResult_BadRequest;
+	/*if (!requestText)
+		return MakeHttpRequestResult_BadRequest;*/
+
+	switch (requestTextError)
+	{
+		case GetHttpRequestTextResult_AllocationFailed:
+			goto AllocationError;
+		case GetHttpRequestTextResult_EmptyRequest:
+			return MakeHttpRequestResult_EmptyRequest; //returning here is fine, I haven't allocated anything yet
+	}
 
 	//Get delimiters
 	methodEnd = strchr(requestText, ' ');
@@ -434,19 +487,19 @@ static int MakeHttpRequest(HttpRequestInfo *info, struct HttpRequest *result)
 
 	memset(result, 0, sizeof(struct HttpRequest));
 
-	result->method = malloc((size_t)(methodEnd - requestText + 1));
+	result->method = allocate(methodEnd - requestText + 1);
 	if (!result->method)
 		goto AllocationError;
 	strncpy(result->method, requestText, (size_t)(methodEnd - requestText));
 	result->method[methodEnd - requestText] = 0;
 
-	result->resource = malloc((size_t)(resourceEnd - resourceBegin + 1));
+	result->resource = allocate(resourceEnd - resourceBegin + 1);
 	if (!result->resource)
 		goto AllocationError;
 	strncpy(result->resource, resourceBegin, (size_t)(resourceEnd - resourceBegin));
 	result->resource[resourceEnd - resourceBegin] = 0;
 
-	result->version = malloc((size_t)(versionEnd - versionBegin + 1));
+	result->version = allocate(versionEnd - versionBegin + 1);
 	if (!result->version)
 		goto AllocationError;
 	strncpy(result->version, versionBegin, (size_t)(versionEnd - versionBegin));
@@ -465,7 +518,7 @@ static int MakeHttpRequest(HttpRequestInfo *info, struct HttpRequest *result)
 				--fieldNameSize;
 
 			char *fieldValueBegin = fieldName + fieldNameSize, *fieldValueEnd = strstr(fieldValueBegin, "\r\n");
-			result->fields[i] = malloc((size_t)(fieldValueEnd - fieldValueBegin + 1));
+			result->fields[i] = allocate(fieldValueEnd - fieldValueBegin + 1);
 
 			if (result->fields[i]) {
 				strncpy(result->fields[i], fieldValueBegin, (size_t)(fieldValueEnd - fieldValueBegin));
@@ -538,7 +591,7 @@ static void* dispatcher(void *arg)
 			char *lastSlash = reverseCharSearch(req.resource, '/'), *match = strstr(req.resource, slot->context);
 			int matchedUntilLastSlash = !strncmp(slot->context, req.resource, (size_t)(lastSlash - req.resource));
 
-			if (match && match == req.resource && matchedUntilLastSlash)
+			if (match == req.resource && matchedUntilLastSlash)
 			{
 				size_t contextLength = strlen(slot->context);
 
@@ -594,7 +647,7 @@ static void* serverProcedure(void *arg)
 		while (HttpServer_GetStatus(svData) == ServerStatus_Running)
 		{
 			#ifdef USE_SELECT
-			if (select((int)maxFd + 1, &descriptors, NULL, NULL, NULL) != -1)
+			if (select((int)maxFd + 1, &descriptors, NULL, NULL, NULL) != SOCKET_ERROR)
 			{
 				for (i = 0; i <= maxFd; ++i)
 				{
@@ -942,14 +995,17 @@ void HttpServer_DestroyResponse(HttpResponseHandle response)
 	}
 }
 
-int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCode)
+int HttpServer_SetResponseStatusCode(HttpResponseHandle response, unsigned short statusCode)
 {
 	int result = 1;
 	response->errorCode = ResponseError_Success;
-	size_t codeLength = integerDigitCount((size_t)statusCode) + 1;
+	int codeLength = integerDigitCount(statusCode) + 1;
 
-	if (statusCode <= 599) {
-		if ((response->statusCode = malloc(codeLength))) {
+	if (statusCode <= 599)
+	{
+		response->statusCode = allocate(codeLength);
+
+		if (response->statusCode) {
 			sprintf(response->statusCode, "%d", statusCode);
 		}
 		else {

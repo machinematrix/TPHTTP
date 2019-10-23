@@ -142,7 +142,7 @@ extern "C" {
 
 	HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);
 	void HttpServer_DestroyResponse(HttpResponseHandle response);
-	int HttpServer_SetResponseStatusCode(HttpResponseHandle response, short statusCode);
+	int HttpServer_SetResponseStatusCode(HttpResponseHandle response, unsigned short statusCode);
 	int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value);
 	int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, size_t bodyLength);
 	int HttpServer_SendResponse(HttpResponseHandle response);
