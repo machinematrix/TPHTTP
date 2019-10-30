@@ -173,7 +173,7 @@ void image(HttpRequestHandle req)
 
 int main(int argc, char **argv)
 {
-	int error;
+	ServerError error;
 	programName = basename(argv[0]);
 	HttpServerHandle server = HttpServer_Create(80, &error);
 
@@ -213,11 +213,11 @@ int main(int argc, char **argv)
 
 		if (HttpServer_GetStatus(server) == ServerStatus_Running)
 		{
-			int continuar = 1;
+			char continuar[50] = { 0 }; //string
 
-			while (continuar)
+			while (strcmp(continuar, "exit"))
 			{
-				scanf("%d", &continuar);
+				scanf("%s", &continuar);
 			}
 		}
 		else

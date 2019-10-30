@@ -6,13 +6,13 @@
 extern "C" {
 #endif
 
-	enum ServerStatus
+	typedef enum
 	{
 		ServerStatus_Running = 1,
 		ServerStatus_Stopped
-	};
+	} ServerStatus;
 
-	enum ServerError
+	typedef enum
 	{
 		ServerError_Success,
 		ServerError_ThreadCreationError,
@@ -21,18 +21,18 @@ extern "C" {
 		ServerError_AllocationFailed,
 		ServerError_WSAStartupError, //Windows only
 		ServerError_Initialization
-	};
+	} ServerError;
 
-	enum ResponseError
+	typedef enum
 	{
 		ResponseError_Success,
 		ResponseError_AllocationFailed,
 		ResponseError_InvalidStatusCode,
 		ResponseError_InvalidHttpVersion,
 		ResponseError_WriteFailed,
-	};
+	} ResponseError;
 
-	enum HttpRequestField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_request_fields
+	typedef enum
 	{
 		HttpRequestField_AIM,
 		HttpRequestField_Accept,
@@ -73,9 +73,9 @@ extern "C" {
 		HttpRequestField_Upgrade,
 		HttpRequestField_Via,
 		HttpRequestField_Warning, //last field
-	};
+	} HttpRequestField; //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_request_fields
 
-	enum HttpResponseField //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_response_fields
+	typedef enum
 	{
 		HttpResponseField_AccessControlAllowOrigin,
 		HttpResponseField_AccessControlAllowCredentials,
@@ -123,27 +123,28 @@ extern "C" {
 		HttpResponseField_Warning,
 		HttpResponseField_WWWAuthenticate,
 		HttpResponseField_XFrameOptions
-	};
+	} HttpResponseField; //https://en.wikipedia.org/wiki/List_of_HTTP_header_fields#Standard_response_fields
 
 	typedef struct HttpServer *HttpServerHandle;
 	typedef struct HttpRequest *HttpRequestHandle;
 	typedef struct HttpResponse *HttpResponseHandle;
+
 	typedef void(HandlerCallback)(HttpRequestHandle);
 	typedef void(LoggerCallback)(const char*);
 
-	HttpServerHandle HttpServer_Create(unsigned short port, int *errorCode);
+	HttpServerHandle HttpServer_Create(unsigned short port, ServerError *errorCode);
 	int HttpServer_Start(HttpServerHandle server);
 	void HttpServer_Destroy(HttpServerHandle server);
 	int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback *callback);
-	int HttpServer_GetStatus(HttpServerHandle server);
-	const char* HttpServer_GetServerError(int errorCode);
+	ServerStatus HttpServer_GetStatus(HttpServerHandle server);
+	const char* HttpServer_GetServerError(ServerError errorCode);
 	int HttpServer_GetErrorCode(HttpServerHandle server);
 	int HttpServer_SetLoggerCallback(HttpServerHandle server, LoggerCallback *callback);
 
 	HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);
 	void HttpServer_DestroyResponse(HttpResponseHandle response);
 	int HttpServer_SetResponseStatusCode(HttpResponseHandle response, unsigned short statusCode);
-	int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value);
+	int HttpServer_SetResponseField(HttpResponseHandle response, HttpResponseField field, const char *value);
 	int HttpServer_SetResponseBody(HttpResponseHandle response, const void *body, size_t bodyLength);
 	int HttpServer_SendResponse(HttpResponseHandle response);
 	const char* HttpServer_GetResponseError(HttpResponseHandle response);
@@ -151,7 +152,7 @@ extern "C" {
 	const char* HttpServer_GetRequestMethod(HttpRequestHandle request);
 	const char* HttpServer_GetRequestUri(HttpRequestHandle request);
 	const char* HttpServer_GetRequestVersion(HttpRequestHandle request);
-	const char* HttpServer_GetRequestField(HttpRequestHandle request, int field);
+	const char* HttpServer_GetRequestField(HttpRequestHandle request, HttpRequestField field);
 	const void* HttpServer_GetRequestBody(HttpRequestHandle request);
 	unsigned long long HttpServer_GetRequestBodySize(HttpRequestHandle request);
 
