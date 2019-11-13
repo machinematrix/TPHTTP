@@ -138,7 +138,7 @@ extern "C" {
 	int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource, HandlerCallback *callback);
 	ServerStatus HttpServer_GetStatus(HttpServerHandle server);
 	const char* HttpServer_GetServerError(ServerError errorCode);
-	int HttpServer_GetErrorCode(HttpServerHandle server);
+	ServerError HttpServer_GetErrorCode(HttpServerHandle server);
 	int HttpServer_SetLoggerCallback(HttpServerHandle server, LoggerCallback *callback);
 
 	HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request);

@@ -26,6 +26,10 @@
 #include "Thread.h"
 #include "Vector.h"
 
+#ifdef USE_THREADPOOL
+	#include "threadpool.h"
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -44,7 +48,6 @@ enum GetHttpRequestTextResult
 	GetHttpRequestTextResult_Success,
 	GetHttpRequestTextResult_EmptyRequest
 };
-
 
 typedef struct
 {
@@ -642,6 +645,10 @@ static void* serverProcedure(void *arg)
 		Socket maxFd = svData->sock;
 		FD_ZERO(&descriptors);
 		FD_SET(svData->sock, &descriptors);
+		#elif defined(USE_THREADPOOL)
+		threadpool_t *threadPool = threadpool_create(4, 10, 0);
+		if (!threadPool)
+			HttpServerSetStatus(svData, ServerStatus_Stopped);
 		#endif
 
 		while (HttpServer_GetStatus(svData) == ServerStatus_Running)
@@ -686,13 +693,24 @@ static void* serverProcedure(void *arg)
 					info->sock = clientSocket;
 					info->server = svData;
 
+					#ifdef USE_THREADS
 					Thread th = createThread(dispatcher, info);
 					if (th)
 						destroyThread(th);
+					else
+						free(info);
+					#elif defined(USE_THREADPOOL)
+					if (threadpool_add(threadPool, dispatcher, info, 0))
+						free(info);
+					#endif
 				}
 			}
 			#endif
 		}
+
+		#ifdef USE_THREADPOOL
+		threadpool_destroy(threadPool, threadpool_graceful);
+		#endif
 	}
 	else {
 		HttpServerSetStatus(svData, ServerStatus_Stopped);
@@ -747,7 +765,7 @@ static void createServerErrorHandler(HttpServerHandle *sv)
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-HttpServerHandle HttpServer_Create(unsigned short port, int *errorCode)
+HttpServerHandle HttpServer_Create(unsigned short port, ServerError *errorCode)
 {
 	*errorCode = ServerError_Success;
 	#ifdef _WIN32
@@ -905,7 +923,7 @@ int HttpServer_SetEndpointCallback(HttpServerHandle server, const char *resource
 	return result;
 }
 
-int HttpServer_GetStatus(HttpServerHandle server)
+ServerStatus HttpServer_GetStatus(HttpServerHandle server)
 {
 	int result;
 
@@ -916,7 +934,7 @@ int HttpServer_GetStatus(HttpServerHandle server)
 	return result;
 }
 
-const char* HttpServer_GetServerError(int errorCode)
+const char* HttpServer_GetServerError(ServerError errorCode)
 {
 	switch (errorCode)
 	{
@@ -937,7 +955,7 @@ const char* HttpServer_GetServerError(int errorCode)
 	}
 }
 
-int HttpServer_GetErrorCode(HttpServerHandle server)
+ServerError HttpServer_GetErrorCode(HttpServerHandle server)
 {
 	return server->errorCode;
 }
@@ -965,6 +983,7 @@ HttpResponseHandle HttpServer_CreateResponse(HttpRequestHandle request)
 		size_t versionLength = strlen(version);
 		result->sock = request->sock;
 		result->version = malloc(versionLength + 1);
+
 		if (result->version)
 		{
 			strcpy(result->version, version);
@@ -1021,7 +1040,7 @@ int HttpServer_SetResponseStatusCode(HttpResponseHandle response, unsigned short
 	return result;
 }
 
-int HttpServer_SetResponseField(HttpResponseHandle response, int field, const char *value)
+int HttpServer_SetResponseField(HttpResponseHandle response, HttpResponseField field, const char *value)
 {
 	int result = 0;
 	void *fieldTemp = malloc(strlen(value) + 1);
@@ -1070,66 +1089,47 @@ int HttpServer_SendResponse(HttpResponseHandle response)
 		return 0;
 	}
 
-	static const char *responseBegin = "HTTP/", *fieldEnd = "\r\n";
+	static const char *responseBegin = "HTTP/", *crlf = "\r\n";
 	size_t i;
 
-	VectorHandle resp = Vector_Create(sizeof(char));
-	if (!resp)
-		goto AllocationError;
-	Vector_InsertRange(resp, Vector_Size(resp), responseBegin, responseBegin + strlen(responseBegin)); //header begin
-	if (Vector_AllocFailed(resp))
-		goto AllocationError;
-	Vector_InsertRange(resp, Vector_Size(resp), response->version, response->version + strlen(response->version)); //version
-	if (Vector_AllocFailed(resp))
-		goto AllocationError;
-	Vector_PushBack(resp, &(char){ ' ' }); //space
-	if (Vector_AllocFailed(resp))
-		goto AllocationError;
-	Vector_InsertRange(resp, Vector_Size(resp), response->statusCode, response->statusCode + strlen(response->statusCode));
-	if (Vector_AllocFailed(resp))
-		goto AllocationError;
-	Vector_InsertRange(resp, Vector_Size(resp), fieldEnd, fieldEnd + strlen(fieldEnd)); //new line
-	if (Vector_AllocFailed(resp))
-		goto AllocationError;
+	if (myWrite(response->sock, responseBegin, strlen(responseBegin)))
+		goto WriteError;
+	if (myWrite(response->sock, response->version, strlen(response->version)))
+		goto WriteError;
+	if (myWrite(response->sock, &(char) { ' ' }, 1))
+		goto WriteError;
+	if (myWrite(response->sock, response->statusCode, strlen(response->statusCode)))
+		goto WriteError;
+	if (myWrite(response->sock, crlf, strlen(crlf)))
+		goto WriteError;
+
 
 	for (i = 0; i < HttpResponseField_XFrameOptions + 1; ++i)
 	{
-		if (response->fields[i]) {
+		if (response->fields[i])
+		{
 			const char *fieldName = getHttpResponseFieldText((int)i);
-			Vector_InsertRange(resp, Vector_Size(resp), fieldName, fieldName + strlen(fieldName)); //field name
-			if (Vector_AllocFailed(resp))
-				goto AllocationError;
-			Vector_InsertRange(resp, Vector_Size(resp), response->fields[i], response->fields[i] + strlen(response->fields[i])); // field value
-			if (Vector_AllocFailed(resp))
-				goto AllocationError;
-			Vector_InsertRange(resp, Vector_Size(resp), fieldEnd, fieldEnd + strlen(fieldEnd)); // new line
-			if (Vector_AllocFailed(resp))
-				goto AllocationError;
+			if (myWrite(response->sock, fieldName, strlen(fieldName))) //field name
+				goto WriteError;
+			if (myWrite(response->sock, response->fields[i], strlen(response->fields[i]))) //field value
+				goto WriteError;
+			if (myWrite(response->sock, crlf, strlen(crlf))) //CRLF
+				goto WriteError;
 		}
 	}
-	
-	Vector_InsertRange(resp, Vector_Size(resp), fieldEnd, fieldEnd + strlen(fieldEnd)); //header end
-	if (Vector_AllocFailed(resp))
-		goto AllocationError;
+
+	if (myWrite(response->sock, crlf, strlen(crlf))) //header end
+		goto WriteError;
 
 	if (response->bodySize) {
-		Vector_InsertRange(resp, Vector_Size(resp), response->body, response->body + response->bodySize); //body
-		if (Vector_AllocFailed(resp))
-			goto AllocationError;
+		if (myWrite(response->sock, response->body, response->bodySize))
+			goto WriteError;
 	}
 
-	if (myWrite(response->sock, Vector_At(resp, 0), Vector_Size(resp) * sizeof(char))) {
-		response->errorCode = ResponseError_WriteFailed;
-		Vector_Destroy(resp);
-		return 0;
-	}
-
-	Vector_Destroy(resp);
 	return 1;
 
-AllocationError:
-	response->errorCode = ResponseError_AllocationFailed;
-	Vector_Destroy(resp);
+WriteError:
+	response->errorCode = ResponseError_WriteFailed;
 	return 0;
 }
 
@@ -1167,7 +1167,7 @@ const char* HttpServer_GetRequestVersion(HttpRequestHandle request)
 	return request->version;
 }
 
-const char* HttpServer_GetRequestField(HttpRequestHandle request, int field)
+const char* HttpServer_GetRequestField(HttpRequestHandle request, HttpRequestField field)
 {
 	if (field <= HttpRequestField_Warning) {
 		return request->fields[field];
