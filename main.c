@@ -1,11 +1,13 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
-#include "HttpServer.h"
 #include <string.h>
 #include <dirent.h>
+#include "HttpServer.h"
+#include "Vector.h"
 
 const char *programName;
+VectorHandle files;
 
 void logger(const char *msg)
 {
@@ -30,107 +32,75 @@ void loadFile(FILE *file, void **outBuffer, long *outSize)
 	}
 }
 
-void loadDirectoryFileNames(const char *directory, char ***outFileNames, size_t *outFileCount)
+VectorHandle loadDirectoryFileNames(const char *directory, const char *extension)
 {
+	VectorHandle files = Vector_Create(sizeof(char*));
 	DIR *currDir = opendir(directory);
-	*outFileNames = NULL;
-	*outFileCount = 0;
 
-	if (currDir)
+	if (files && currDir)
 	{
-		size_t count = 0, capacity = 2;
-		*outFileNames = malloc(capacity * sizeof(char*));
+		struct dirent *entry;
 
-		if (*outFileNames)
+		while (entry = readdir(currDir))
 		{
-			struct dirent *entry;
-
-			while ((entry = readdir(currDir)))
+			if (!extension || (strlen(extension) < strlen(entry->d_name) && !strcmp(entry->d_name + strlen(entry->d_name) - strlen(extension), extension)))
 			{
 				char *auxName = malloc(strlen(entry->d_name) + 1);
-				
+
 				if (auxName)
 				{
-					if (count == capacity) {
-						capacity *= 2;
-						*outFileNames = realloc(*outFileNames, capacity * sizeof(char *));
-					}
 					strcpy(auxName, entry->d_name);
-					(*outFileNames)[count++] = auxName;
+					Vector_PushBack(files, &auxName);
 				}
 			}
-
-			if (count)
-				*outFileCount = count;
 		}
 	}
+
+	return files;
 }
 
-void freeDirectoryFileNames(char **fileNames, size_t fileCount)
+void freeDirectoryFileNames(VectorHandle files)
 {
-	if (fileNames) {
-		size_t i;
-		for (i = 0; i < fileCount; ++i)
-			free(fileNames[i]);
-		free(fileNames);
+	if (files)
+	{
+		size_t i, sz;
+		for (i = 0, sz = Vector_Size(files); i < sz; ++i)
+			free(*(char**)Vector_At(files, i));
+
+		Vector_Destroy(files);
 	}
 }
 
 void list(HttpRequestHandle req)
 {
 	HttpResponseHandle response = HttpServer_CreateResponse(req);
-	char **names, strBodySize[16];
+	char strBodySize[16];
 	const char *bodyBeg = "<a href=\"/", *bodyMid = "\">", *bodyEnd = "</a><br />";
 	char *body;
-	size_t count = 2, bodySize = 0, i, bodyBegSize = strlen(bodyBeg), bodyMidSize = strlen(bodyMid), bodyEndSize = strlen(bodyEnd);
+	size_t bodySize = 0, i, sz, bodyBegSize = strlen(bodyBeg), bodyMidSize = strlen(bodyMid), bodyEndSize = strlen(bodyEnd);
 	int offset;
 
-	loadDirectoryFileNames(".", &names, &count);
-	
-	if (names)
+	for (i = 0, sz = Vector_Size(files); i < sz; ++i)
 	{
-		for (i = 0; i < count; ++i)
-		{
-			char *extension = strstr(names[i], ".jpg");
-			size_t fileNameSize = strlen(names[i]);
-			if (extension
-				&& extension == names[i] + fileNameSize - 4
-				&& strcmp(names[i], "..")
-				&& strcmp(names[i], ".")
-				&& strcmp(names[i], programName))
-			{
-				bodySize += bodyBegSize + strlen(names[i]) + bodyMidSize + strlen(names[i]) + bodyEndSize;
-			}
-		}
-
-		body = malloc(bodySize);
-		sprintf(strBodySize, "%d", bodySize);
-
-		for (i = 0, offset = 0; i < count; ++i)
-		{
-			char *extension = strstr(names[i], ".jpg");
-			size_t fileNameSize = strlen(names[i]);
-
-			if (extension
-				&& extension == names[i] + fileNameSize - 4
-				&& strcmp(names[i], "..")
-				&& strcmp(names[i], ".")
-				&& strcmp(names[i], programName))
-			{
-				offset += sprintf(body + offset, "%s%s%s%s%s", bodyBeg, names[i], bodyMid, names[i], bodyEnd);
-			}
-		}
-		freeDirectoryFileNames(names, count);
-
-		HttpServer_SetResponseStatusCode(response, 200);
-		HttpServer_SetResponseField(response, HttpResponseField_ContentType, "text/html");
-		HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
-		HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
-		HttpServer_SetResponseBody(response, body, bodySize);
-		HttpServer_SendResponse(response);
-
-		free(body);
+		bodySize += bodyBegSize + strlen(*(char**)Vector_At(files, i)) + bodyMidSize + strlen(*(char**)Vector_At(files, i)) + bodyEndSize;
 	}
+
+	body = malloc(bodySize);
+	sprintf(strBodySize, "%d", bodySize);
+
+	for (i = 0, sz = Vector_Size(files), offset = 0; i < sz; ++i)
+	{
+		offset += sprintf(body + offset, "%s%s%s%s%s", bodyBeg, *(char**)Vector_At(files, i), bodyMid, *(char**)Vector_At(files, i), bodyEnd);
+	}
+
+	HttpServer_SetResponseStatusCode(response, 200);
+	HttpServer_SetResponseField(response, HttpResponseField_ContentType, "text/html");
+	HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
+	HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
+	HttpServer_SetResponseBody(response, body, bodySize);
+	HttpServer_SendResponse(response);
+
+	free(body);
 
 	HttpServer_DestroyResponse(response);
 }
@@ -171,6 +141,21 @@ void image(HttpRequestHandle req)
 	HttpServer_DestroyResponse(response);
 }
 
+void redirectToList(HttpRequestHandle req)
+{
+	HttpResponseHandle resp = HttpServer_CreateResponse(req);
+
+	if (resp)
+	{
+		HttpServer_SetResponseStatusCode(resp, 303);
+		HttpServer_SetResponseField(resp, HttpResponseField_ContentType, "text/html");
+		HttpServer_SetResponseField(resp, HttpResponseField_Location, "/list");
+		HttpServer_SendResponse(resp);
+	}
+
+	HttpServer_DestroyResponse(resp);
+}
+
 int main(int argc, char **argv)
 {
 	ServerError error;
@@ -179,50 +164,43 @@ int main(int argc, char **argv)
 
 	if (server)
 	{
-		char **names;
-		size_t count;
-		loadDirectoryFileNames(".", &names, &count);
+		files = loadDirectoryFileNames(".", ".jpg");
 
-		if (names)
+		if (files)
 		{
-			size_t i;
-			for (i = 0; i < count; ++i)
+			size_t i, sz;
+			for (i = 0, sz = Vector_Size(files); i < sz; ++i)
 			{
-				if (strcmp(names[i], ".") && strcmp(names[i], "..") && strcmp(names[i], basename(argv[0])))
+				char *resourcePath = malloc(strlen(*(char**)Vector_At(files, i)) + 2);
+				if (resourcePath)
 				{
-					char *extension = strstr(names[i], ".jpg");
-					size_t fileNameSize = strlen(names[i]);
-					if (extension
-						&& extension == names[i] + fileNameSize - 4
-						&& strcmp(names[i], programName))
-					{
-						char *resourcePath = malloc(fileNameSize + 2);
-						resourcePath[0] = '/';
-						strcpy(resourcePath + 1, names[i]);
-						HttpServer_SetEndpointCallback(server, resourcePath, image);
-						free(resourcePath);
-					}
+					sprintf(resourcePath, "/%s", *(char**)Vector_At(files, i));
+					HttpServer_SetEndpointCallback(server, resourcePath, image);
+					free(resourcePath);
 				}
 			}
-		}
-		freeDirectoryFileNames(names, count);
-		HttpServer_SetEndpointCallback(server, "/list", list);
-		HttpServer_SetLoggerCallback(server, logger);
 
-		HttpServer_Start(server);
 
-		if (HttpServer_GetStatus(server) == ServerStatus_Running)
-		{
-			char continuar[50] = { 0 }; //string
+			HttpServer_SetEndpointCallback(server, "/list", list);
+			HttpServer_SetEndpointCallback(server, "/", redirectToList);
+			HttpServer_SetLoggerCallback(server, logger);
 
-			while (strcmp(continuar, "exit"))
+			HttpServer_Start(server);
+
+			if (HttpServer_GetStatus(server) == ServerStatus_Running)
 			{
-				scanf("%s", &continuar);
-			}
-		}
-		else
-			printf("%s\n", HttpServer_GetServerError(HttpServer_GetErrorCode(server)));
+				char continuar[50] = { 0 };
 
+				while (strcmp(continuar, "exit"))
+				{
+					scanf("%s", &continuar);
+				}
+			}
+			else
+				printf("%s\n", HttpServer_GetServerError(HttpServer_GetErrorCode(server)));
+		}
+
+		freeDirectoryFileNames(files);
 		HttpServer_Destroy(server);
 	}
 	else printf("Could not create server\n");
