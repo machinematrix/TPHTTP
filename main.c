@@ -128,20 +128,15 @@ void image(HttpRequestHandle req)
 
 		if (fileBuffer && fileSize)
 		{
-			if (fileBuffer) {
-				char strSize[32];
-				sprintf(strSize, "%d", fileSize);
-				HttpServer_SetResponseStatusCode(response, 200);
-				HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strSize);
-				HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/jpeg");
-				//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
-				HttpServer_SetResponseBody(response, fileBuffer, (size_t)fileSize);
+			char strSize[32];
+			sprintf(strSize, "%d", fileSize);
+			HttpServer_SetResponseStatusCode(response, 200);
+			HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strSize);
+			HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/jpeg");
+			//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+			HttpServer_SetResponseBody(response, fileBuffer, (size_t)fileSize);
 
-				free(fileBuffer);
-			}
-			else {
-				HttpServer_SetResponseStatusCode(response, 404);
-			}
+			free(fileBuffer);
 		}
 		else {
 			HttpServer_SetResponseStatusCode(response, 404);
@@ -190,6 +185,7 @@ void favicon(HttpRequestHandle req)
 			HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
 			//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
 			HttpServer_SetResponseBody(response, fileBuffer, fileSize);
+			free(fileBuffer);
 		}
 		else {
 			HttpServer_SetResponseStatusCode(response, 404);
