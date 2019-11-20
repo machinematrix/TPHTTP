@@ -6,7 +6,6 @@
 #include "HttpServer.h"
 #include "Vector.h"
 
-const char *programName;
 VectorHandle files;
 
 void logger(const char *msg)
@@ -14,21 +13,32 @@ void logger(const char *msg)
 	printf("%s\n", msg);
 }
 
-void loadFile(FILE *file, void **outBuffer, long *outSize)
+void loadFile(const char *fileName, void **outBuffer, long *outSize)
 {
-	fseek(file, 0, SEEK_END);
-	long size = ftell(file);
-	rewind(file);
-	void *buffer = malloc((size_t)size);
-	
-	if (buffer) {
-		fread(buffer, 1, (size_t)size, file);
-		*outSize = size;
-		*outBuffer = buffer;
-	}
-	else {
-		*outSize = 0;
-		*outBuffer = NULL;
+	FILE *file = fopen(fileName, "rb");
+
+	*outSize = 0;
+	*outBuffer = NULL;
+
+	if (file)
+	{
+		fseek(file, 0, SEEK_END);
+		long size = ftell(file);
+		rewind(file);
+		void *buffer = malloc((size_t)size);
+
+		if (buffer)
+		{
+			size_t bytesRead = fread(buffer, 1, (size_t)size, file);
+			if (bytesRead == size) {
+				*outSize = size;
+				*outBuffer = buffer;
+			}
+			else //either a reading error occurred or the end of file was reached while reading
+				free(buffer);
+		}
+
+		fclose(file);
 	}
 }
 
@@ -96,6 +106,7 @@ void list(HttpRequestHandle req)
 	HttpServer_SetResponseStatusCode(response, 200);
 	HttpServer_SetResponseField(response, HttpResponseField_ContentType, "text/html");
 	HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
+	//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
 	HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
 	HttpServer_SetResponseBody(response, body, bodySize);
 	HttpServer_SendResponse(response);
@@ -108,58 +119,93 @@ void list(HttpRequestHandle req)
 void image(HttpRequestHandle req)
 {
 	HttpResponseHandle response = HttpServer_CreateResponse(req);
-	FILE *file = fopen(HttpServer_GetRequestUri(req) + 1, "rb");
 
-	if (file)
+	if (response)
 	{
-		void *fileBuffer = NULL;
-		long fileSize = 0;
-		loadFile(file, &fileBuffer, &fileSize);
+		void *fileBuffer;
+		long fileSize;
+		loadFile(HttpServer_GetRequestUri(req) + 1, &fileBuffer, &fileSize);
 
-		if (fileBuffer) {
-			char strSize[32];
-			sprintf(strSize, "%d", fileSize);
-			HttpServer_SetResponseStatusCode(response, 200);
-			HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strSize);
-			HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/jpeg");
-			HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
-			HttpServer_SetResponseBody(response, fileBuffer, (size_t)fileSize);
-			
-			free(fileBuffer);
+		if (fileBuffer && fileSize)
+		{
+			if (fileBuffer) {
+				char strSize[32];
+				sprintf(strSize, "%d", fileSize);
+				HttpServer_SetResponseStatusCode(response, 200);
+				HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strSize);
+				HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/jpeg");
+				//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+				HttpServer_SetResponseBody(response, fileBuffer, (size_t)fileSize);
+
+				free(fileBuffer);
+			}
+			else {
+				HttpServer_SetResponseStatusCode(response, 404);
+			}
 		}
 		else {
 			HttpServer_SetResponseStatusCode(response, 404);
 		}
 
-		fclose(file);
+		HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
+		HttpServer_SendResponse(response);
+		HttpServer_DestroyResponse(response);
 	}
-	else {
-		HttpServer_SetResponseStatusCode(response, 404);
-	}
-
-	HttpServer_SendResponse(response);
-	HttpServer_DestroyResponse(response);
 }
 
 void redirectToList(HttpRequestHandle req)
 {
-	HttpResponseHandle resp = HttpServer_CreateResponse(req);
+	HttpResponseHandle response = HttpServer_CreateResponse(req);
 
-	if (resp)
+	if (response)
 	{
-		HttpServer_SetResponseStatusCode(resp, 303);
-		HttpServer_SetResponseField(resp, HttpResponseField_ContentType, "text/html");
-		HttpServer_SetResponseField(resp, HttpResponseField_Location, "/list");
-		HttpServer_SendResponse(resp);
+		HttpServer_SetResponseStatusCode(response, 303);
+		HttpServer_SetResponseField(response, HttpResponseField_ContentType, "text/html");
+		//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+		HttpServer_SetResponseField(response, HttpResponseField_Location, "/list");
+		HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
+		HttpServer_SendResponse(response);
 	}
 
-	HttpServer_DestroyResponse(resp);
+	HttpServer_DestroyResponse(response);
+}
+
+//poner un archivo favicon.ico en la carpeta del programa para que se muestre en las pesta?as del navegador
+void favicon(HttpRequestHandle req)
+{
+	HttpResponseHandle response = HttpServer_CreateResponse(req);
+
+	if (response)
+	{
+		void *fileBuffer;
+		long fileSize;
+		char strBodySize[16];
+		loadFile("./favicon.ico", &fileBuffer, &fileSize);
+
+		if (fileBuffer && fileSize)
+		{
+			sprintf(strBodySize, "%d", fileSize);
+			HttpServer_SetResponseStatusCode(response, 200);
+			HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/x-icon");
+			HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
+			//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+			HttpServer_SetResponseBody(response, fileBuffer, fileSize);
+		}
+		else {
+			HttpServer_SetResponseStatusCode(response, 404);
+		}
+
+		HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
+		HttpServer_SendResponse(response);
+	}
+
+	HttpServer_DestroyResponse(response);
 }
 
 int main(int argc, char **argv)
 {
+	//system("pwd");
 	ServerError error;
-	programName = basename(argv[0]);
 	HttpServerHandle server = HttpServer_Create(80, &error);
 
 	if (server)
@@ -180,9 +226,9 @@ int main(int argc, char **argv)
 				}
 			}
 
-
 			HttpServer_SetEndpointCallback(server, "/list", list);
 			HttpServer_SetEndpointCallback(server, "/", redirectToList);
+			HttpServer_SetEndpointCallback(server, "/favicon.ico", favicon);
 			HttpServer_SetLoggerCallback(server, logger);
 
 			HttpServer_Start(server);
@@ -203,7 +249,10 @@ int main(int argc, char **argv)
 		freeDirectoryFileNames(files);
 		HttpServer_Destroy(server);
 	}
-	else printf("Could not create server\n");
+	else {
+		printf("Error: %s\n", HttpServer_GetServerError(error));
+		system("read -n1 -r -p \"Press any key to continue...\" key");
+	}
 
     return 0;
 }

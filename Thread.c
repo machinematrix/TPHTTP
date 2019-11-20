@@ -72,13 +72,16 @@ Mutex createMutex()
 
 void destroyMutex(Mutex mutex)
 {
-	#ifdef __linux__
-	pthread_mutex_destroy(&(mutex->mutexHandle));
-	#elif defined(_WIN32)
-	CloseHandle(mutex->mutexHandle);
-	#endif
+	if (mutex)
+	{
+		#ifdef __linux__
+		pthread_mutex_destroy(&(mutex->mutexHandle));
+		#elif defined(_WIN32)
+		CloseHandle(mutex->mutexHandle);
+		#endif
 
-	free(mutex);
+		free(mutex);
+	}
 }
 
 void lockMutex(Mutex mutex)
@@ -139,9 +142,12 @@ Thread createThread(void*(*fn)(void*), void *arg)
 
 void destroyThread(Thread thread)
 {
-	#ifdef _WIN32
-	CloseHandle(thread->threadHandle);
-	#endif
+	if (thread)
+	{
+		#ifdef _WIN32
+		CloseHandle(thread->threadHandle);
+		#endif
 
-	free(thread);
+		free(thread);
+	}
 }

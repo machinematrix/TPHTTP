@@ -20,7 +20,9 @@ extern "C" {
 		ServerError_Running,
 		ServerError_AllocationFailed,
 		ServerError_WSAStartupError, //Windows only
-		ServerError_Initialization
+		ServerError_Initialization,
+		ServerError_GetAddrInfo,
+		ServerError_Bind,
 	} ServerError;
 
 	typedef enum

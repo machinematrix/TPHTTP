@@ -94,7 +94,7 @@ typedef struct //Usada para pasarle informacion a httpParser
 {
 	Socket sock;
 	HttpServerHandle server;
-} HttpRequestInfo;
+} HttpConnectionInfo;
 
 //used for allocating memory with a signed type without getting warnings
 static void* allocate(ssize_t size)
@@ -447,7 +447,7 @@ static char* getHttpRequestText(Socket sock, int *errorCode)
 	return result;
 }
 
-static int MakeHttpRequest(HttpRequestInfo *info, struct HttpRequest *result)
+static int MakeHttpRequest(HttpConnectionInfo *info, struct HttpRequest *result)
 {
 	size_t i;
 	int requestTextError;
@@ -579,7 +579,7 @@ static void TryLog(HttpServerHandle server, const char *msg)
 
 static void* dispatcher(void *arg)
 {
-	HttpRequestInfo *info = arg;
+	HttpConnectionInfo *info = arg;
 
 	size_t handlerIndex = ~0u;
 	size_t i, sz, bestMatchLength = 0;
@@ -633,6 +633,14 @@ static void* dispatcher(void *arg)
 	return NULL;
 }
 
+#ifdef USE_THREADPOOL
+//callbacks de threadpool usa una firma diferente a las callbacks de pthreads, esta funcion tiene la firma apropiada para thread pool
+void threadPoolCallback(void *httpConnectionInfo)
+{
+	dispatcher(httpConnectionInfo);
+}
+#endif
+
 static void* serverProcedure(void *arg)
 {
     HttpServerHandle svData = arg;
@@ -672,7 +680,7 @@ static void* serverProcedure(void *arg)
 						}
 						else
 						{
-							HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
+							HttpConnectionInfo *info = calloc(1, sizeof(HttpConnectionInfo));
 							if (info) {
 								info->sock = i;
 								info->server = svData;
@@ -687,7 +695,7 @@ static void* serverProcedure(void *arg)
 			Socket clientSocket = accept(svData->sock, NULL, NULL);
 			if (clientSocket != SOCKET_ERROR)
 			{
-				HttpRequestInfo *info = calloc(1, sizeof(HttpRequestInfo));
+				HttpConnectionInfo *info = calloc(1, sizeof(HttpConnectionInfo));
 				if (info)
 				{
 					info->sock = clientSocket;
@@ -700,7 +708,7 @@ static void* serverProcedure(void *arg)
 					else
 						free(info);
 					#elif defined(USE_THREADPOOL)
-					if (threadpool_add(threadPool, dispatcher, info, 0))
+					if (threadpool_add(threadPool, threadPoolCallback, info, 0))
 						free(info);
 					#endif
 				}
@@ -752,13 +760,6 @@ static char poke(HttpServerHandle data) //returns 1 if it could poke server, 0 o
 	return result;
 }
 
-static void createServerErrorHandler(HttpServerHandle *sv)
-{
-	free(*sv);
-	*sv = NULL;
-	//printf("%s\n", strerror(errno));
-}
-
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 //API---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -770,69 +771,72 @@ HttpServerHandle HttpServer_Create(unsigned short port, ServerError *errorCode)
 	*errorCode = ServerError_Success;
 	#ifdef _WIN32
 	WSADATA wsaData = { 0 };
-	if (!WSAStartup(MAKEWORD(2, 2), &wsaData))
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData))
 	{
-		#endif
-
-		HttpServerHandle sv = calloc(1, sizeof(struct HttpServer));
-
-		if (sv)
-		{
-			sv->queueLength = 5;
-			sv->sock = socket(AF_INET, SOCK_STREAM, 0);
-			sv->status = ServerStatus_Stopped;
-			sv->mtx = createMutex();
-			sv->handlerVector = Vector_Create(sizeof(HandlerSlot));
-			char optval[8] = { 0 };
-
-			if (sv->mtx
-				&& sv->handlerVector
-				&& sv->sock != INVALID_SOCKET
-				&& !setsockopt(sv->sock, SOL_SOCKET, SO_REUSEADDR, optval, sizeof(optval)))
-			{
-				struct addrinfo *list = NULL, hint = { 0 };
-
-				sprintf(sv->strPort, "%d", port);
-				hint.ai_flags = AI_NUMERICSERV | AI_PASSIVE;
-				hint.ai_family = AF_INET; //IPv4
-				hint.ai_socktype = SOCK_STREAM;
-				hint.ai_protocol = IPPROTO_TCP;
-
-				if (!getaddrinfo(NULL, sv->strPort, &hint, &list))
-				{
-					#ifdef __linux__
-					socklen_t len = list->ai_addrlen;
-					#elif defined(_WIN32)
-					int len = (int)list->ai_addrlen;
-					#endif
-
-					if (bind(sv->sock, list->ai_addr, len) == SOCKET_ERROR)
-					{
-						CloseSocket(sv->sock);
-						*errorCode = ServerError_Initialization;
-						createServerErrorHandler(&sv);
-					}
-					freeaddrinfo(list);
-				}
-				else {
-					*errorCode = ServerError_Initialization;
-					createServerErrorHandler(&sv);
-				}
-			}
-			else {
-				*errorCode = ServerError_Initialization;
-				createServerErrorHandler(&sv);
-			}
-		}
-		else {
-			*errorCode = ServerError_AllocationFailed;
-		}
-		return sv;
-		#ifdef _WIN32
+		*errorCode = ServerError_WSAStartupError;
+		return NULL;
 	}
-	else *errorCode = ServerError_WSAStartupError;
-	return NULL;
 	#endif
+
+	HttpServerHandle newServer = calloc(1, sizeof(struct HttpServer));
+
+	if (!newServer) {
+		*errorCode = ServerError_AllocationFailed;
+		return newServer;
+	}
+
+	struct addrinfo *list = NULL, hint = { 0 };
+	socklen_t len;
+
+	sprintf(newServer->strPort, "%d", port);
+	hint.ai_flags = AI_NUMERICSERV /*puerto que le paso a getaddrinfo estara en formato numerico*/ | AI_PASSIVE /*socket va a ser de escucha*/;
+	hint.ai_family = AF_INET; //IPv4
+	hint.ai_socktype = SOCK_STREAM;
+	hint.ai_protocol = IPPROTO_TCP;
+
+	newServer->queueLength = 5;
+	newServer->sock = socket(hint.ai_family, hint.ai_socktype, hint.ai_protocol);
+	newServer->status = ServerStatus_Stopped;
+	newServer->mtx = createMutex();
+	newServer->handlerVector = Vector_Create(sizeof(HandlerSlot));
+
+	if (!newServer->mtx
+		|| !newServer->handlerVector
+		|| newServer->sock == INVALID_SOCKET
+		|| setsockopt(newServer->sock, SOL_SOCKET, SO_REUSEADDR, (void*)&(int) { 1 }, sizeof(int)))
+	{
+		*errorCode = ServerError_Initialization;
+		goto Cleanup;
+	}
+
+	if (getaddrinfo(NULL, newServer->strPort, &hint, &list)) {
+		*errorCode = ServerError_GetAddrInfo;
+		goto Cleanup;
+	}
+
+	#ifdef __linux__
+	len = list->ai_addrlen;
+	#elif defined(_WIN32)
+	len = (int)list->ai_addrlen; //porque en winsock addrinfo::ai_addrlen no tiene el tipo socklen_t, por algun motivo...
+	#endif
+
+	if (bind(newServer->sock, list->ai_addr, len) == SOCKET_ERROR) {
+		*errorCode = ServerError_Bind;
+		freeaddrinfo(list);
+		goto Cleanup;
+	}
+	freeaddrinfo(list);
+
+	return newServer;
+
+Cleanup:
+	if (newServer->sock != INVALID_SOCKET)
+		CloseSocket(newServer->sock);
+	destroyMutex(newServer->mtx);
+	Vector_Destroy(newServer->handlerVector);
+
+	free(newServer);
+	return NULL;
 }
 
 int HttpServer_Start(HttpServerHandle server)
@@ -950,6 +954,10 @@ const char* HttpServer_GetServerError(ServerError errorCode)
 		return "Could not initialize Winsock DLL";
 	case ServerError_Initialization:
 		return "Failed to initialize server object";
+	case ServerError_GetAddrInfo:
+		return "Failed to get local address info";
+	case ServerError_Bind:
+		return "Failed to bind server socket to local address and specified port";
 	default:
 		return "";
 	}
