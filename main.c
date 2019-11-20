@@ -106,7 +106,7 @@ void list(HttpRequestHandle req)
 	HttpServer_SetResponseStatusCode(response, 200);
 	HttpServer_SetResponseField(response, HttpResponseField_ContentType, "text/html");
 	HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
-	//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+	HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
 	HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
 	HttpServer_SetResponseBody(response, body, bodySize);
 	HttpServer_SendResponse(response);
@@ -133,7 +133,7 @@ void image(HttpRequestHandle req)
 			HttpServer_SetResponseStatusCode(response, 200);
 			HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strSize);
 			HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/jpeg");
-			//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+			HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
 			HttpServer_SetResponseBody(response, fileBuffer, (size_t)fileSize);
 
 			free(fileBuffer);
@@ -156,7 +156,7 @@ void redirectToList(HttpRequestHandle req)
 	{
 		HttpServer_SetResponseStatusCode(response, 303);
 		HttpServer_SetResponseField(response, HttpResponseField_ContentType, "text/html");
-		//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+		HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
 		HttpServer_SetResponseField(response, HttpResponseField_Location, "/list");
 		HttpServer_SetResponseField(response, HttpResponseField_Connection, "close");
 		HttpServer_SendResponse(response);
@@ -183,7 +183,7 @@ void favicon(HttpRequestHandle req)
 			HttpServer_SetResponseStatusCode(response, 200);
 			HttpServer_SetResponseField(response, HttpResponseField_ContentType, "image/x-icon");
 			HttpServer_SetResponseField(response, HttpResponseField_ContentLength, strBodySize);
-			//HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
+			HttpServer_SetResponseField(response, HttpResponseField_CacheControl, "no-store");
 			HttpServer_SetResponseBody(response, fileBuffer, fileSize);
 			free(fileBuffer);
 		}
