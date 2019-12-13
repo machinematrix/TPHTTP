@@ -26,10 +26,6 @@
 #include "Thread.h"
 #include "Vector.h"
 
-#ifdef USE_THREADPOOL
-	#include "threadpool.h"
-#endif
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -633,14 +629,6 @@ static void* dispatcher(void *arg)
 	return NULL;
 }
 
-#ifdef USE_THREADPOOL
-//callbacks de threadpool usa una firma diferente a las callbacks de pthreads, esta funcion tiene la firma apropiada para thread pool
-void threadPoolCallback(void *httpConnectionInfo)
-{
-	dispatcher(httpConnectionInfo);
-}
-#endif
-
 static void* serverProcedure(void *arg)
 {
     HttpServerHandle svData = arg;
@@ -706,9 +694,6 @@ static void* serverProcedure(void *arg)
 					if (th)
 						destroyThread(th);
 					else
-						free(info);
-					#elif defined(USE_THREADPOOL)
-					if (threadpool_add(threadPool, threadPoolCallback, info, 0))
 						free(info);
 					#endif
 				}
